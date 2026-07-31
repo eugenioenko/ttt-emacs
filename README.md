@@ -47,13 +47,14 @@ harmless if you keep it.
 | **Files** | `C-x C-s` `C-x C-f` `C-x b` `C-x k` `C-x C-c` |
 | **Commands** | `M-x` `C-g` `C-u` `C-h b` |
 | **Macros** | `C-x (` `C-x )` `C-x e` |
+| **Search** | `C-s` `C-r` — incremental: `DEL` backtracks, `C-g` aborts, `RET` exits |
 
 `C-h b` (describe-bindings) lists every binding from inside the editor. Arrow
 keys, `<home>`, `<end>`, `<pgup>` and `<pgdn>` work as their Emacs equivalents,
 so the region follows them too.
 
 Not yet implemented, and stubbed with a message rather than silently ignored:
-isearch (`C-s` / `C-r`), query-replace (`M-%`) and rectangles (`C-x r …`).
+query-replace (`M-%`) and rectangles (`C-x r …`).
 
 ## Settings
 

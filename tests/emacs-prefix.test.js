@@ -77,7 +77,14 @@ describe("emacs prefix: self-insertion", () => {
     expect(r.point).toBe("1:3");
   });
 
-  it("shows EMACS in the status bar when nothing is pending", () => {
-    expect(emacs(FIXTURE, ["C-f"]).status).toContain("EMACS");
+  it("leaves the status slot EMPTY when nothing is pending", () => {
+    // Emacs is not modal, so there is no mode label worth showing: the slot
+    // carries only the transient states (a pending prefix, C-u, C-q, macro
+    // recording) and is empty during ordinary editing.
+    const idle = emacs(FIXTURE, ["C-f"]).status;
+    expect(idle).not.toContain("EMACS");
+    expect(idle).toContain("Ln 1, Col 2");
+    // …and a transient indicator still appears in it.
+    expect(emacs(FIXTURE, ["C-x", probe(), "C-g"]).probes[0].status).toContain("C-x-");
   });
 });

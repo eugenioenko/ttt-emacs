@@ -6,7 +6,7 @@
 import { describe, it, expect } from "vitest";
 import { makeRng } from "./rng.js";
 import { generate } from "./generator.js";
-import { tokensToEmacsKbd, tokensToTttKeys, isNamed, isLiteral, isToken } from "./keys.js";
+import { tokensToEmacsKbd, tokensToTttKeys, isNamed, isLiteral, isToken, tokenCommandCount } from "./keys.js";
 import { lineColToPoint, pointToLineCol, compareStates } from "./normalize.js";
 import * as A from "./alphabet.js";
 
@@ -83,6 +83,28 @@ describe("key translation", () => {
   it("splits a run that would be stripped as a quoted string", () => {
     // --exec stripQuotes' a `type` arg that both starts and ends with `"`.
     expect(tokensToTttKeys(['"', "a", '"'])).toEqual(['type "a', 'type "']);
+  });
+
+  it("keeps a whole isearch as ONE compound token", () => {
+    expect(tokensToEmacsKbd(["C-s beta RET"])).toEqual(["C-s b e t a RET"]);
+    expect(tokensToTttKeys(["C-s beta RET"])).toEqual(["key ctrl+s", "type beta", "key enter"]);
+    expect(tokensToTttKeys(["C-s beta C-r RET"])).toEqual(["key ctrl+s", "type beta", "key ctrl+r", "key enter"]);
+    expect(tokensToTttKeys(["a", "C-s x RET", "b"])).toEqual(["type a", "key ctrl+s", "type x", "key enter", "type b"]);
+  });
+
+  it("counts a compound as one command PER KEY", () => {
+    // The oracle's error-resume arithmetic reads this to find the token that
+    // signalled (emacs-oracle.js); measured against Emacs 27.1, not assumed.
+    expect(tokenCommandCount("C-f")).toBe(1);
+    expect(tokenCommandCount("C-x C-x")).toBe(1); // a prefix key completes no command
+    expect(tokenCommandCount("C-s the RET")).toBe(5);
+    expect(tokenCommandCount("C-s the C-s RET")).toBe(6);
+  });
+
+  it("rejects a malformed compound", () => {
+    expect(isToken("C-s beta")).toBe(false); // no terminator
+    expect(isToken("C-f beta RET")).toBe(false); // not a search key
+    expect(isToken("C-s be ta RET")).toBe(true); // a space separates typed runs
   });
 
   it("rejects multi-char literal tokens (one token must be one command)", () => {

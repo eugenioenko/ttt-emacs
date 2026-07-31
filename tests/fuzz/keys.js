@@ -69,6 +69,65 @@ export function isNamed(tok) {
   return Object.prototype.hasOwnProperty.call(NAMED, tok);
 }
 
+// --- compound tokens: one complete isearch ----------------------------------
+//
+// isearch is INTERACTIVE: it reads keys until an explicit terminator, so a
+// generator that emitted `C-s` as a loose token would leave both editors inside
+// a search and every following token would mean something else on each side.
+// The way in (DESIGN.md, "Widening the alphabet") is a compound token: the
+// whole search, terminator included, as ONE indivisible unit.
+//
+// Grammar — space separated, `C-s` or `C-r` first, `RET` last, and in between
+// either another `C-s`/`C-r` (a repeat, or a change of direction) or a run of
+// printable non-space characters to type into the search string:
+//
+//   "C-s beta RET"          search forward for "beta" and stop there
+//   "C-r beta RET"          the same, backwards
+//   "C-s beta C-s RET"      … and repeat before stopping
+//   "C-s beta C-r RET"      … and turn around before stopping
+//
+// One compound is several *commands* from the command loop's point of view, so
+// the oracle's per-token error-resume arithmetic (emacs-oracle.js) cannot name
+// the offending key inside one. That is acceptable precisely because no isearch
+// key in this grammar signals: a failing search dings, it does not error.
+const ISEARCH_KEYS = { "C-s": "ctrl+s", "C-r": "ctrl+r" };
+
+export function parseCompound(tok) {
+  if (typeof tok !== "string" || tok.indexOf(" ") < 0) return null;
+  const parts = tok.split(" ");
+  if (parts.length < 3 || !ISEARCH_KEYS[parts[0]] || parts[parts.length - 1] !== "RET") return null;
+  const atoms = [];
+  for (const p of parts) {
+    if (ISEARCH_KEYS[p] || p === "RET") {
+      atoms.push({ key: p });
+      continue;
+    }
+    // A typed run: printable ASCII, no spaces (a space would be indistinguishable
+    // from the separator, so search strings simply may not contain one).
+    if (!/^[!-~]+$/.test(p)) return null;
+    atoms.push({ text: p });
+  }
+  return atoms;
+}
+
+export function isCompound(tok) {
+  return parseCompound(tok) !== null;
+}
+
+// How many COMMANDS a token runs, as the Emacs command loop counts them.
+//
+// The oracle identifies a token that signalled by counting `pre-command-hook`
+// firings (emacs-oracle.js), which is exact only because one token is normally
+// one command. A compound token is not: every key inside an isearch runs its
+// own command (isearch-printing-char, isearch-repeat-forward, isearch-exit),
+// measured at exactly one per key. A multi-key token like `C-x C-x` still
+// counts as one, because a prefix key completes no command.
+export function tokenCommandCount(tok) {
+  const atoms = parseCompound(tok);
+  if (!atoms) return 1;
+  return atoms.reduce((n, a) => n + (a.key ? 1 : [...a.text].length), 0);
+}
+
 // A literal token is exactly one printable ASCII character. Unlike the Vim
 // harness, multi-char literal tokens are rejected: a token must be one command,
 // and one self-insert is one command.
@@ -79,7 +138,7 @@ export function isLiteral(tok) {
 }
 
 export function isToken(tok) {
-  return isNamed(tok) || isLiteral(tok);
+  return isNamed(tok) || isLiteral(tok) || isCompound(tok);
 }
 
 // --- Emacs side -------------------------------------------------------------
@@ -91,6 +150,12 @@ const LITERAL_KBD = { " ": "SPC" };
 export function tokenToEmacsKbd(tok) {
   if (isNamed(tok)) return tok;
   if (isLiteral(tok)) return LITERAL_KBD[tok] || tok;
+  const atoms = parseCompound(tok);
+  if (atoms) {
+    // The characters of a search string are ordinary self-inserting keys inside
+    // isearch, so each becomes its own kbd description.
+    return atoms.map((a) => (a.key ? a.key : [...a.text].map((c) => LITERAL_KBD[c] || c).join(" "))).join(" ");
+  }
   throw new Error(`keys: untranslatable token for emacs: ${JSON.stringify(tok)}`);
 }
 
@@ -132,6 +197,19 @@ export function tokensToTttKeys(tokens) {
     if (isNamed(t)) {
       flush();
       steps.push(`key ${NAMED[t].ttt}`);
+      continue;
+    }
+    const atoms = parseCompound(t);
+    if (atoms) {
+      flush();
+      for (const a of atoms) {
+        if (a.key) {
+          steps.push(`key ${a.key === "RET" ? "enter" : ISEARCH_KEYS[a.key]}`);
+        } else {
+          run = a.text;
+          flush();
+        }
+      }
       continue;
     }
     if (isLiteral(t)) {

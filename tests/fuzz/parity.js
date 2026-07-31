@@ -130,7 +130,15 @@ export const EMACS_SETUP = [
   // ---- search ----
   {
     form: "(setq case-fold-search t)",
-    why: "pinned now even though isearch is deferred, so adding C-s later does not move the goalposts",
+    why: "the base for isearch's smart case: a lower-case search string folds case, an upper-case character in it does not (isearch-no-upper-case-p). ttt-emacs implements exactly that rule",
+  },
+  {
+    form: "(setq search-nonincremental-instead nil)",
+    why: "RET on an EMPTY isearch string otherwise starts a NONINCREMENTAL search, which prompts in the minibuffer — in batch that swallows the rest of the macro as input and hangs the oracle. ttt-emacs has no nonincremental search: RET simply exits",
+  },
+  {
+    form: "(setq search-upper-case 'not-yanks)",
+    why: "the default; it is what enables the smart-case rule above at all (nil would make every search fold case)",
   },
 
   // ---- undo ----

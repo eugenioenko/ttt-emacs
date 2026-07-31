@@ -55,6 +55,48 @@ export const OTHER = [
   { key: "C-/", cmd: "undo", exercises: "undo grouping + consecutive-undo chaining" },
 ];
 
+// --- incremental search (a COMPOUND unit, not a loose token) ----------------
+//
+// `C-s` on its own is not fuzzable: isearch reads keys until a terminator, so a
+// loose `C-s` leaves both editors inside a search and everything after it means
+// something different on each side. A search WITH its terminator is completely
+// deterministic, which is why this enters the alphabet as a compound token —
+// `C-s <chars> RET`, translated as one unit by keys.js (`parseCompound`).
+//
+// The strings are half hits and half misses against `corpus.js`: a miss is not
+// a dud, it exercises the failing state, and a following `C-s` inside the same
+// compound then exercises wrapping. Mixed-case strings exercise smart case
+// (a lower-case string folds case; one upper-case character does not).
+export const SEARCH_STRINGS = [
+  // present in CORPUS and/or SMALL
+  "the",
+  "e",
+  "a",
+  "line",
+  "foo",
+  "beta",
+  "two",
+  "quick",
+  "x",
+  ")",
+  "1",
+  // present only with case folding
+  "THE",
+  "Foo",
+  "mixedcase",
+  // absent: the failing / wrapping path
+  "zq",
+  "qqq",
+  "42x",
+];
+
+export const ISEARCH = [
+  { key: "C-s … RET", cmd: "isearch-forward", exercises: "literal search, smart case, mark at the origin" },
+  { key: "C-r … RET", cmd: "isearch-backward", exercises: "backward search, point at the match beginning" },
+  { key: "C-s … C-s RET", cmd: "isearch-repeat-forward", exercises: "repeat, and wrapping when the search failed" },
+  { key: "C-s … C-r RET", cmd: "isearch-repeat-backward", exercises: "changing direction mid-search" },
+];
+
 // Characters typed as self-insert-command. ASCII only for v1; includes the
 // brackets/quotes/underscores that make word and syntax boundaries interesting.
 // A literal space IS included (keys.js emits it as `key space`, never inside a
@@ -66,15 +108,13 @@ export const SELF_INSERT = [..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJ0123456789 .
 // ADD THEM HERE. Each needs work in the generator (and, for the first two, in
 // the oracle) before it can be fuzzed; see DESIGN.md "Widening the alphabet".
 //
-//   - C-s / C-r (isearch) and M-% (query-replace) are *interactive*: they read
-//     keys until an explicit terminator (RET / ESC / C-g). A generator that
-//     emits them without a matching terminator leaves the oracle inside a
-//     recursive read and the two sides diverge for reasons that say nothing
-//     about correctness. They work fine in batch when driven as a COMPLETE
-//     unit — verified: (kbd "C-s b e t a RET") lands point at 11 on
-//     "alpha beta gamma\ndelta beta epsilon" — so the way in is a compound
-//     generator action that emits the whole search-and-terminate sequence as
-//     one indivisible group, not a loose token.
+//   - M-% (query-replace) is *interactive*: it reads keys until an explicit
+//     terminator, so a generator that emits it as a loose token leaves the
+//     oracle inside a recursive read and the two sides diverge for reasons that
+//     say nothing about correctness. The way in is the same one isearch took —
+//     a compound token carrying the whole prompt-and-terminate sequence (see
+//     SEARCH_STRINGS / ISEARCH above and keys.js `parseCompound`) — plus a
+//     query-replace implementation to compare against.
 //   - C-g (keyboard-quit) signals `quit`, not `error`. The oracle already
 //     catches it, but "what is the state after a quit mid-command" is not a
 //     property we can state until prefix arguments and isearch are in.
@@ -89,9 +129,7 @@ export const SELF_INSERT = [..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJ0123456789 .
 //     that parity.js only pins nominally; add them together with an indent
 //     parity pass.
 export const DEFERRED = [
-  { key: "C-s", cmd: "isearch-forward", blocked: "interactive; needs a compound generator action" },
-  { key: "C-r", cmd: "isearch-backward", blocked: "interactive; needs a compound generator action" },
-  { key: "M-%", cmd: "query-replace", blocked: "interactive; needs a compound generator action" },
+  { key: "M-%", cmd: "query-replace", blocked: "interactive, and not implemented yet; needs a compound token" },
   { key: "C-g", cmd: "keyboard-quit", blocked: "quit signal; no stated property yet" },
   { key: "C-u", cmd: "universal-argument", blocked: "spans tokens; breaks 1 token = 1 command" },
   { key: "C-x C-s", cmd: "save-buffer", blocked: "prompts in batch; would hang the oracle" },
@@ -105,7 +143,8 @@ export const keys = (group) => group.map((e) => e.key);
 // Everything the generator may emit as a bare token.
 export const ALL = [...keys(MOVEMENT), ...keys(KILL_YANK), ...keys(MARK), ...keys(CASE), ...keys(OTHER)];
 
-// Lookup for reports: token → what it exercises.
+// Lookup for reports: token → what it exercises. The ISEARCH entries are keyed
+// by their SHAPE ("C-s … RET"), since the token itself carries a search string.
 export const INFO = Object.fromEntries(
-  [...MOVEMENT, ...KILL_YANK, ...MARK, ...CASE, ...OTHER, ...DEFERRED].map((e) => [e.key, e]),
+  [...MOVEMENT, ...KILL_YANK, ...MARK, ...CASE, ...OTHER, ...ISEARCH, ...DEFERRED].map((e) => [e.key, e]),
 );

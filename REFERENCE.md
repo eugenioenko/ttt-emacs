@@ -69,7 +69,8 @@ respect all three:
 | Editing, case, transpose, open-line | ✅ |
 | Keyboard macros (`C-x (` / `)` / `e`) | ✅ |
 | `M-x`, `C-x C-f`, `C-x b`, `C-x k` (bridged to ttt's overlays) | ✅ |
-| isearch (`C-s` / `C-r`), query-replace (`M-%`) | ⏳ stubbed |
+| Incremental search (`C-s` / `C-r`) | ✅ |
+| query-replace (`M-%`) | ⏳ stubbed |
 | Rectangles and registers (`C-x r …`) | ⏳ stubbed |
 
 Behaviour is pinned against **GNU Emacs 27.1 in `fundamental-mode`** by a
@@ -119,6 +120,22 @@ Emacs would call it active.
 | `C-q` | quoted-insert |
 | `C-/` `C-x u` | undo |
 | `C-g` | keyboard-quit |
+
+### Incremental search
+
+| Key | Command |
+|---|---|
+| `C-s` | isearch-forward — start, or repeat forwards |
+| `C-r` | isearch-backward — start, or repeat backwards |
+| *printable* | add to the search string and re-search |
+| `DEL` | back to the previous search state |
+| `RET` `Esc` | exit, leaving point at the match |
+| `C-g` | drop the failed characters, or abort back to where the search started |
+| *anything else* | exit the search, then run that key normally |
+
+The prompt is the echo area: `I-search: foo`, `I-search backward: foo`,
+`Failing I-search: foo`, `Wrapped I-search: foo`. Matches are highlighted with
+ttt's own find highlight for as long as the search is live.
 
 ### Files, buffers and commands
 
@@ -175,8 +192,15 @@ keystrokes. That is fatal for any Emacs prompt that has to keep reading keys *as
 Emacs commands*: `C-g` to abort, `C-s C-s` to repeat a search, `DEL` to
 backtrack. So messages and prompts are rendered with `ttt.set_status_item`,
 which is not focusable and leaves the plugin holding the keyboard. `echo(msg)`
-and `signal(msg)` are the whole API; the deferred isearch and query-replace work
-sits on them.
+and `signal(msg)` are the whole API, and incremental search — the one prompt
+that really does read Emacs commands — is built on them.
+
+The status bar carries two items: `echo` for the message, and `mode` for the
+*transient* indicators (a pending prefix `C-x-`, a universal argument `C-u 4`,
+`C-q-`, `Def` while recording a macro). There is deliberately **no idle label**:
+Vim shows one because it is modal and the label says what the next keystroke
+will do, but Emacs is not modal and has no such indicator, so when nothing is
+pending the slot is removed rather than filled with a constant.
 
 The *completing* prompts deliberately go the other way. `M-x`, `C-x C-f` and
 `C-x b` hand over to ttt's own overlays, because those are prompts that own the
@@ -211,6 +235,74 @@ approximated:
   quirk is reproduced on purpose: appending onto an *empty* ring signals after
   the text has already been deleted, so `C-w C-k` deletes the line and stores
   nothing.
+
+### Incremental search: a state machine, a backtrack stack, and one way out
+
+isearch is the reason the echo area is the status bar. It is also the only part
+of the plugin that owns the keyboard for more than one keystroke, so it is
+written as an explicit state machine rather than as a set of commands.
+
+`state.isearch` is nil unless a search is running, and otherwise holds all of
+it: `str` (literal, never a regexp), `dir`, `origin` (point when the search
+started), `barrier`, `match`, `failing`, `wrapped` and `stack`. The dispatcher
+checks that one field first, before the prefix trie and before the universal
+argument, and routes the key to the isearch keymap.
+
+**The backtrack stack.** `DEL` is `isearch-delete-char`, which undoes the last
+*command*, not the last character. A snapshot — string, point, match,
+direction, failing, wrapped, barrier — is pushed after every isearch command,
+including the one that starts the search, so the stack always has a floor that
+`DEL` will not pop. `C-s f o o C-s DEL` therefore returns to the **first** match
+of `foo`; it does not become a search for `fo`. `C-g` uses the same stack for
+its first stage.
+
+**`C-g` is two commands in one key** (`isearch-abort`): while the search is
+*failing* it pops states until one succeeded — "rub out the characters that made
+it fail" — and stays in the search. While it is succeeding it aborts outright,
+returning point to `origin`. The abort does not remember the search string.
+
+**Exit and redispatch.** Any key isearch does not handle itself ends the search
+and is then executed normally, which is `isearch-other-meta-char`. This is the
+one place this section reaches back into the dispatcher, and the order matters:
+the search is torn down **first**, so the recursive `dispatch()` cannot land
+back in the isearch keymap, and its return value is passed through, so a key ttt
+owns still falls through to the editor. Losing the key here would read as "the
+plugin ate my keystroke".
+
+**Emacs rules that are easy to get wrong**, each checked against 27.1 through
+the differential oracle rather than guessed:
+
+- **Forward search leaves point at the END of the match, backward at its
+  BEGINNING**, and *changing direction lands on the other end of the same
+  match* — `isearch-repeat` flips the direction and searches again from point,
+  which re-finds what is already there.
+- **A typed character extends the current match in place when it can.** Forward,
+  the search resumes from the *start* of the current match, so the match may
+  stay where it is or move later. Backward, a match that still begins where this
+  one does is kept and point does not move at all, provided it does not reach
+  past the search origin (the `barrier`).
+- **Typing while the search is failing does not search.**
+  `isearch-search-and-update` only runs while the search succeeds, so failed
+  characters pile onto the string with point untouched — which is what makes
+  `C-g`'s first stage meaningful.
+- **A failing search does not move point.** Emacs restores point from the last
+  pushed state, including after a wrap that found nothing.
+- **Exiting pushes the mark where the search started** (`isearch-done`), so
+  `C-x C-x` jumps back — but **not** when a region is already live, because
+  pushing would move the mark out from under it, and not when point never moved.
+  A live region survives the whole search and follows point to the match.
+- **Smart case** is `isearch-no-upper-case-p`: a search string that is all lower
+  case folds case, and one upper-case character makes the search
+  case-sensitive. The test is per *rune*, not a `%u` byte match, which would
+  call the `0xC3` lead byte of a two-byte rune upper case.
+- **`C-s` with an empty search string reuses the last string** and searches for
+  it from point. That is the whole of the search ring here (see "Known gaps").
+- Match highlighting goes through `editor.set_search`, which is always
+  case-*sensitive* for a plain pattern, so a case-folding search hands it a
+  quoted regexp with an inline `(?i)` instead. The plugin's own matching stays
+  literal either way — a rune-array comparison, so multi-byte lines behave and
+  no regexp engine is needed. The search string can never contain a newline
+  (`RET` exits), so a match never spans lines.
 
 ### The editor shim keeps positions valid across edits
 
@@ -325,14 +417,35 @@ never around a call that runs a core command — core opens its own.
   of self-inserts coalesces correctly — `a b c C-/` restores the buffer in one
   step and leaves point where Emacs leaves it — but undo *after a kill* drifts,
   in both the resulting text and point. Measured over 200 fuzz seeds on a ttt
-  carrying #427: 169 matched, 31 diverged, and all 31 contain `C-/` (18 differ
-  in text and point, 7 in point only, 6 in text only). Closing this means
+  carrying #427: 164 matched, 36 diverged, and 33 of the 36 contain `C-/`.
+  Closing this means
   reimplementing Emacs's undo-boundary rules against a stack the plugin does not
   own, so it is deliberately not attempted. The affected cases are pinned in
   `tests/fuzz/differential.test.js` under `KNOWN_DIVERGENCES`.
-- **isearch (`C-s` / `C-r`) and query-replace (`M-%`) are stubs.** They need the
-  incremental prompt described above; the echo-area helpers they will sit on are
-  in place. `Ctrl+F` and `Ctrl+R` remain available.
+- **The empty region is not treated as Emacs treats it.** The other 3 of those
+  36 seeds, minimized and pinned alongside the undo cases. Neither has anything
+  to do with isearch — both still diverge with the search tokens stripped out —
+  and both live in rules this document already states, one step further:
+  - `use-empty-active-region` is nil, so an **empty** active region is not a
+    region for `delete-backward-char`: `C-f C-SPC DEL` deletes the character
+    before point. ttt-emacs takes the delete-active-region path for any active
+    region and so deletes nothing.
+  - **An empty kill is still a kill-ring entry.** `kill-new ""` pushes, so
+    `C-y` after one yanks *nothing*; ttt-emacs drops empty kills and `C-y` then
+    yanks the previous entry — a whole line appearing out of nowhere. `M-d` at
+    `point-max` is the same story from the other side: Emacs does not signal
+    there, it kills the empty region and the ring head becomes `""`.
+- **isearch has one search string of history and none of the extras.**
+  `C-s` on an empty string reuses the last string, which is what `C-s C-s`
+  needs, but there is no search *ring* (`M-p` / `M-n`), no `C-w` / `C-y` /
+  `M-y` yanking into the search, no regexp isearch (`C-M-s`), no word or symbol
+  search, and no `M-e` to edit the string. Every one of those keys takes the
+  exit-and-redispatch path instead, so `C-s foo C-w` exits the search and kills
+  the region rather than pulling the next word into it. `TAB` likewise exits and
+  indents, where Emacs would add a tab to the search string.
+- **query-replace (`M-%`) is a stub.** It wants the same echo-area prompt
+  isearch is built on, plus a per-match `y`/`n`/`!` keymap. `Ctrl+R` (ttt's own
+  replace) remains available.
 - **Rectangles and registers (`C-x r …`) are stubs.** Present as a keymap so
   `C-x r k` does not leak a stray `k` into the buffer.
 - **`C-x C-w` (write-file) is a stub.** `file.saveAs` opens its own dialog and
