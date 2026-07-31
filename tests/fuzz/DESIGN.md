@@ -80,11 +80,25 @@ A **token** is one complete key sequence == one Emacs **command**:
   `C-SPC`, `C-x C-x`, `DEL`, `RET`, `C-/`
 - or exactly one printable ASCII character, which self-inserts: `a`, `(`, `"`,
   `" "` (a literal space)
+- or a **compound** token: one complete incremental search, terminator included
+  — `C-s beta RET`, `C-r beta RET`, `C-s beta C-s RET`, `C-s beta C-r RET`
 
 `C-x C-x` is deliberately **one** token, not two. The one-token-one-command
 invariant is what lets the oracle resume after an erroring command (below), and
 it is why `C-u` (universal-argument, which merges with the *next* command) is on
 the deferred list.
+
+The compound token is the one deliberate exception, and it exists because
+isearch is *interactive*: it reads keys until an explicit terminator, so a loose
+`C-s` would leave both editors inside a search and every token after it would
+mean something different on each side. A search carrying its own terminator is
+deterministic. The exception is paid for in exactly one place — the oracle's
+error-resume arithmetic, which maps a command count back to a token through
+`tokenCommandCount` (`keys.js`) instead of assuming one command per token. A
+compound is one command per *key*, measured, not guessed: `C-s t h e RET` is 5
+commands, `C-x C-x` is still 1 (a prefix key completes no command). Getting that
+mapping wrong does not fail loudly — the restart skips live tokens and the run
+reports a divergence in a command that never ran.
 
 Translation:
 
@@ -157,9 +171,10 @@ violated.
    The oracle runs the whole token list as **one** macro (preserving command-loop
    continuity, see gotcha 5) and, on a signal, records the failure and
    **restarts the macro at the following token**. A `pre-command-hook` counter
-   identifies the offending token, which works precisely because one token is
-   one command. `quit` (C-g) is a signal, not an error, so the handler catches
-   `(error quit)`.
+   identifies the offending token, walked back through the per-token command
+   counts (`oracle-token-at`) — one per token everywhere except inside a
+   compound isearch, which is one per key. `quit` (C-g) is a signal, not an
+   error, so the handler catches `(error quit)`.
 
 5. **Command-loop continuity is real state — do not run one token per
    `execute-kbd-macro`.** Measured on Emacs 27.1:
@@ -255,7 +270,9 @@ harness could ignore entirely.
 | `tab-width` 4 | `tabSize: 4` | |
 | `require-final-newline` nil | `insertFinalNewline: true` | both inert — nothing is saved — pinned so a future save-based case starts from a known model |
 | `kill-ring-max` 60 | — | only observable once `M-y` lands; pinned now so it never becomes the surprise |
-| `case-fold-search` t | — | pinned now even though isearch is deferred |
+| `case-fold-search` t | — | the base for isearch's smart case: a lower-case search string folds case, one upper-case character in it does not |
+| `search-upper-case` `not-yanks` | — | the default, and what enables the smart-case rule at all — nil would make every search fold case |
+| `search-nonincremental-instead` nil | — | `RET` on an **empty** isearch string otherwise starts a *nonincremental* search, which prompts in the minibuffer; in batch that swallows the rest of the macro as input and **hangs** the oracle. ttt-emacs has no nonincremental search |
 | — | `showTrailingNewline: false` | gotcha 7: the buffer-model pin, and the reason ttt-vim's phantom-line problem does not exist here |
 
 ### Word boundaries: the major mode *is* a parity setting
@@ -302,26 +319,40 @@ Emacs command it exercises.
 - **Mark:** `C-SPC C-x C-x`
 - **Case:** `M-u M-l M-c`
 - **Other:** `C-t C-o C-/`
+- **Search:** `C-s <chars> RET`, `C-r <chars> RET`, each optionally with a
+  repeat or a change of direction before the terminator — as **compound**
+  tokens (see "The token model"), never as a loose `C-s`
 - **Self-insert:** printable ASCII, including a literal space
+
+`SEARCH_STRINGS` in `alphabet.js` is half hits and half misses against
+`corpus.js` on purpose: a miss is not a dud, it exercises the *failing* state,
+and a `C-s` after it exercises **wrapping**. Mixed-case strings exercise smart
+case.
 
 ### Widening the alphabet
 
 `alphabet.js` has an explicit `DEFERRED` array — **add new keys there first**,
-with the reason they are blocked. Current entries:
+with the reason they are blocked.
 
-- **`C-s` / `C-r` (isearch) and `M-%` (query-replace)** — excluded from the
-  initial alphabet because they are *interactive*: they read keys until an
-  explicit terminator, so a generator that emits them as loose tokens leaves
-  both editors mid-search and diverging for uninteresting reasons. They work
-  fine in batch when driven as a complete unit — verified:
-  `(kbd "C-s b e t a RET")` correctly lands point at 11 on
-  `"alpha beta gamma\ndelta beta epsilon"`. The way in is a **compound generator
-  action** that emits search-string-plus-terminator as one indivisible group
-  (and a matching compound token in `keys.js` so the oracle's error-resume logic
-  still sees one unit), not a loose token in `ALL`.
+Isearch was the first entry to come off that list, and it is the worked example
+for anything else interactive (`M-%` next). What it took:
+
+1. a **compound token** in `keys.js` (`parseCompound`) so the whole
+   search-and-terminate sequence is one indivisible unit on both sides;
+2. `tokenCommandCount`, because a compound is several commands and the oracle's
+   error-resume arithmetic assumed one;
+3. two parity pins (`search-nonincremental-instead`, `search-upper-case`) —
+   the first of which *hangs* the oracle when it is missed;
+4. a generator action that emits the compound, and fixed cases in
+   `differential.test.js`.
+
+Still deferred:
+- **`M-%` (query-replace)** — interactive in the same way isearch was, and not
+  implemented in the plugin yet. Same recipe as above.
 - **`C-g`** — signals `quit`, not `error`; the oracle already catches it, but
   there is no stated property for "state after a quit mid-command" until prefix
-  args and isearch land.
+  args land. (isearch's own `C-g` *is* covered — inside a compound it is just
+  another key, and `tests/emacs-isearch.test.js` pins both of its stages.)
 - **`C-u`** — spans tokens, breaking one-token-one-command. Emit `C-u 3 C-f` as
   a single compound token when it lands.
 - **`C-x C-s`** — would prompt for a filename in the oracle (the buffer has no
@@ -363,8 +394,9 @@ in a newline** (gotcha 7).
 2. **Generator over the v1 alphabet** — a batch of seeds, triage the first
    divergences.
 3. **Shrinking + reporter polish**, findings written up.
-4. **Widen the alphabet** (isearch/query-replace as compound actions, prefix
-   args, registers, macros), then a UTF-8 corpus.
+4. **Widen the alphabet.** isearch landed here, as a compound token — see
+   "Widening the alphabet" for the four things it took. Next: query-replace,
+   prefix args, registers, macros, then a UTF-8 corpus.
 
 Prereqs: `emacs` on PATH (verified against **GNU Emacs 27.1**; set `EMACS_BIN`
 to override) and a built ttt binary (`npm run prepare-ttt`, or `TTT_BIN`).

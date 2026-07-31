@@ -6,9 +6,11 @@
 #   2. ../ttt (sibling)     — a local ttt checkout: build it in place.
 #   3. clone ttt @ TTT_REF  — clone the repo and build (TTT_REF default: main).
 #
-# The Vim plugin requires ttt with plugin API v2 (the 1.1.0 line). Building from
-# source guarantees the binary matches whatever ttt ref you point at, with no
-# dependency on a published release.
+# This plugin requires ttt with plugin API v2 (the 1.1.0 line), plus the
+# force-key and KeyNUL/KeyUS naming fixes that landed after it — without the
+# latter, C-/ is indistinguishable from C-SPC. Building from source guarantees
+# the binary matches whatever ttt ref you point at, with no dependency on a
+# published release.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

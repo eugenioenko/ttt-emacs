@@ -20,8 +20,9 @@
 --   Section 9  Kill ring
 --   Section 10 Commands
 --   Section 11 Keyboard macros
---   Section 12 Keymap trie and dispatcher
---   Section 13 Registration and deferred startup
+--   Section 12 Incremental search
+--   Section 13 Keymap trie and dispatcher
+--   Section 14 Registration and deferred startup
 
 local ttt = require("ttt")
 local events = require("ttt.events")
@@ -61,6 +62,12 @@ local state = {
 	recenter = 0, -- C-l cycle position
 	echo_msg = nil, -- current echo-area message
 	clipboard = false, -- emacs.clipboard: mirror kills to the system clipboard
+
+	-- Incremental search (Section 12). `isearch` is nil unless a search is
+	-- running; `isearch_last` is the one bit of history Emacs needs, so that
+	-- C-s C-s repeats the previous search string.
+	isearch = nil,
+	isearch_last = nil,
 }
 
 local KILL_MAX = 60
@@ -265,7 +272,17 @@ local function render_status()
 	if state.macro.recording then
 		parts[#parts + 1] = "Def"
 	end
-	ttt.set_status_item("left", "mode", #parts > 0 and table.concat(parts, " ") or "EMACS", { priority = 10 })
+	-- No idle label. Vim needs one because it is modal and the label says what
+	-- the next keystroke will do; Emacs is not modal and has no such indicator,
+	-- so the slot only ever carries the TRANSIENT states above -- a pending
+	-- prefix, a universal argument, C-q, macro recording -- and is empty during
+	-- ordinary editing. The echo area is a separate item ("echo") and is not
+	-- affected by this.
+	if #parts > 0 then
+		ttt.set_status_item("left", "mode", table.concat(parts, " "), { priority = 10 })
+	else
+		ttt.remove_status_item("mode")
+	end
 
 	if state.echo_msg then
 		ttt.set_status_item("left", "echo", state.echo_msg, { priority = 11 })
@@ -1498,7 +1515,443 @@ cmds.call_last_kbd_macro = function(n)
 end
 
 -- ---------------------------------------------------------------------------
--- Section 12: Keymap trie and dispatcher
+-- Section 12: Incremental search (C-s / C-r)
+--
+-- The one Emacs prompt that could NOT have been built on ttt.command_line.
+-- isearch keeps reading keys as Emacs commands after the prompt is up -- C-s
+-- repeats, DEL backtracks, C-g aborts -- and an overlay would take the keyboard
+-- away from the plugin entirely (Section 3). It renders through echo(), so the
+-- plugin keeps every keystroke.
+--
+-- The search is LITERAL, never a regexp: string comparison over rune arrays, so
+-- multi-byte lines behave and no regexp engine is needed. The search string can
+-- never contain a newline (RET exits), so a match never spans lines.
+--
+-- STATE MACHINE. `state.isearch` is nil when no search is running, and
+-- otherwise holds all of it:
+--
+--   str      the search string
+--   dir      1 forward, -1 backward
+--   origin   point when the search started: where C-g returns to, and where the
+--            mark is pushed on exit
+--   barrier  Emacs's isearch-barrier -- how far a backward match may extend
+--   match    { line, col, len } of the current match, nil when there is none
+--   failing  no match for `str`
+--   wrapped  the search has restarted from the far end of the buffer
+--   stack    one snapshot per command, for DEL
+--
+-- THE BACKTRACK STACK. DEL is isearch-delete-char, which undoes the last
+-- COMMAND, not the last character. A snapshot is pushed after every isearch
+-- command (including the one that starts the search, so the stack always has a
+-- floor), and DEL pops one and restores it whole: string, point, match,
+-- direction, failing and wrapped together. So `C-s f o o C-s DEL` goes back to
+-- the FIRST match of "foo" -- it does not become a search for "fo".
+--
+-- EXIT AND REDISPATCH. Any key isearch does not handle itself ends the search
+-- and is then executed normally (isearch-other-meta-char). This is the one
+-- place this section reaches back into the dispatcher, and the key must not be
+-- lost: the search is torn down FIRST, so the recursive dispatch() cannot land
+-- back in here, and its return value is passed through so that a key ttt owns
+-- still falls through to the editor.
+--
+-- Every rule below was checked against GNU Emacs 27.1 (isearch.el) rather than
+-- guessed; the non-obvious ones are commented where they are implemented.
+-- ---------------------------------------------------------------------------
+
+local isr = {}
+
+-- Smart case: a search string that is all lower case folds case, and one
+-- upper-case character makes the search case-sensitive. This is
+-- `isearch-no-upper-case-p` with `search-upper-case` at its default. The test
+-- is per RUNE rather than a %u byte match, which would call the 0xC3 lead byte
+-- of a two-byte rune upper case.
+isr.fold_case = function(str)
+	for _, r in ipairs(runes_of(str)) do
+		if r ~= string.lower(r) then
+			return false
+		end
+	end
+	return true
+end
+
+-- A line as a rune array, lower-cased when the search folds case. Folding rune
+-- by rune rather than with s:lower() keeps rune indices aligned with the
+-- buffer: Go's ToLower can change a string's byte length.
+isr.fold_runes = function(r, fold)
+	if not fold then
+		return r
+	end
+	local out = {}
+	for i = 1, #r do
+		out[i] = string.lower(r[i])
+	end
+	return out
+end
+
+isr.match_at = function(hay, needle, i)
+	local m = #needle
+	if i < 1 or i + m - 1 > #hay then
+		return false
+	end
+	for j = 1, m do
+		if hay[i + j - 1] ~= needle[j] then
+			return false
+		end
+	end
+	return true
+end
+
+-- First match whose START is at or after (l, c) -- what search-forward finds.
+isr.find_forward = function(needle, fold, l, c)
+	local m = #needle
+	for line = math.max(1, l), line_count() do
+		local hay = isr.fold_runes(line_runes(line), fold)
+		local from = (line == l) and math.max(1, c) or 1
+		for i = from, #hay - m + 1 do
+			if isr.match_at(hay, needle, i) then
+				return line, i
+			end
+		end
+	end
+	return nil
+end
+
+-- Last match whose START is at or before (l, c). Callers that want
+-- search-backward's "the match must END at or before here" pass c - #needle.
+isr.find_backward = function(needle, fold, l, c)
+	local m = #needle
+	for line = math.min(l, line_count()), 1, -1 do
+		local hay = isr.fold_runes(line_runes(line), fold)
+		local upto = (line == l) and c or (#hay - m + 1)
+		if upto > #hay - m + 1 then
+			upto = #hay - m + 1
+		end
+		for i = upto, 1, -1 do
+			if isr.match_at(hay, needle, i) then
+				return line, i
+			end
+		end
+	end
+	return nil
+end
+
+isr.pos_before = function(l1, c1, l2, c2)
+	return l1 < l2 or (l1 == l2 and c1 < c2)
+end
+
+-- The earlier of two positions, as a fresh table.
+isr.min_pos = function(a, b)
+	if isr.pos_before(b.line, b.col, a.line, a.col) then
+		return { line = b.line, col = b.col }
+	end
+	return { line = a.line, col = a.col }
+end
+
+-- Search for the current string from (bl, bc): forward finds the first match
+-- starting at or after it, backward the last match ENDING at or before it.
+isr.locate = function(s, bl, bc)
+	local fold = isr.fold_case(s.str)
+	local needle = isr.fold_runes(runes_of(s.str), fold)
+	if s.dir > 0 then
+		return isr.find_forward(needle, fold, bl, bc)
+	end
+	return isr.find_backward(needle, fold, bl, bc - #needle)
+end
+
+-- Adopt a search result. Forward search leaves point at the END of the match,
+-- backward search at its BEGINNING. A search that fails does NOT move point:
+-- Emacs restores it from the last pushed state, which is where it already is.
+isr.apply = function(s, ml, mc)
+	if not ml then
+		s.failing = true
+		return
+	end
+	local m = rune_len(s.str)
+	s.failing = false
+	s.match = { line = ml, col = mc, len = m }
+	if s.dir > 0 then
+		goto_point(ml, mc + m)
+	else
+		goto_point(ml, mc)
+	end
+	sync_region()
+end
+
+-- Match highlighting borrows ttt's own find highlight. SetSearch is always
+-- case-SENSITIVE for a plain pattern (internal/app/plugin_api.go), so a
+-- case-folding search is handed a quoted regexp with an inline (?i) flag
+-- instead -- the plugin's own matching above stays literal either way.
+isr.regex_quote = function(str)
+	local out = str:gsub("[%^%$%.%|%?%*%+%(%)%[%]%{%}\\]", function(ch)
+		return "\\" .. ch
+	end)
+	return out
+end
+
+isr.highlight = function(s)
+	if s.str == "" then
+		editor.clear_search()
+		return
+	end
+	if isr.fold_case(s.str) then
+		editor.set_search("(?i)" .. isr.regex_quote(s.str), true)
+	else
+		editor.set_search(s.str)
+	end
+end
+
+-- The echo-area prompt, assembled exactly as isearch-message-prefix does:
+-- "failing ", then "over"/"wrapped ", then "case-sensitive " (which Emacs shows
+-- only while failing), then the prompt itself, and the first letter upper-cased
+-- at the end. So: "I-search: foo", "I-search backward: foo",
+-- "Failing I-search: foo", "Wrapped I-search: foo".
+isr.message = function(s)
+	local m = ""
+	if s.failing then
+		m = m .. "failing "
+	end
+	if s.wrapped then
+		local l, c = point()
+		local over
+		if s.dir > 0 then
+			over = isr.pos_before(s.origin.line, s.origin.col, l, c)
+		else
+			over = isr.pos_before(l, c, s.origin.line, s.origin.col)
+		end
+		m = m .. (over and "over" or "") .. "wrapped "
+	end
+	if s.failing and not isr.fold_case(s.str) then
+		m = m .. "case-sensitive "
+	end
+	m = m .. "I-search" .. (s.dir < 0 and " backward" or "") .. ": " .. s.str
+	return m:sub(1, 1):upper() .. m:sub(2)
+end
+
+-- Redisplay after an isearch command: prompt, highlight, and the snapshot DEL
+-- will come back to.
+isr.update = function(s)
+	local l, c = point()
+	s.stack[#s.stack + 1] = {
+		str = s.str,
+		dir = s.dir,
+		failing = s.failing,
+		wrapped = s.wrapped,
+		barrier = { line = s.barrier.line, col = s.barrier.col },
+		match = s.match and { line = s.match.line, col = s.match.col, len = s.match.len } or nil,
+		pl = l,
+		pc = c,
+	}
+	isr.highlight(s)
+	echo(isr.message(s))
+end
+
+isr.restore = function(s, st)
+	s.str = st.str
+	s.dir = st.dir
+	s.failing = st.failing
+	s.wrapped = st.wrapped
+	s.barrier = { line = st.barrier.line, col = st.barrier.col }
+	s.match = st.match and { line = st.match.line, col = st.match.col, len = st.match.len } or nil
+	goto_point(st.pl, st.pc)
+	sync_region()
+	isr.highlight(s)
+	echo(isr.message(s))
+end
+
+isr.begin = function(dir)
+	local l, c = point()
+	local s = {
+		str = "",
+		dir = dir,
+		origin = { line = l, col = c },
+		barrier = { line = l, col = c },
+		match = nil,
+		failing = false,
+		wrapped = false,
+		stack = {},
+	}
+	state.isearch = s
+	isr.update(s)
+end
+
+-- A typed character. `isearch-search-and-update` only searches while the search
+-- is SUCCEEDING -- once it fails, further characters pile onto the string
+-- without moving point, which is what makes C-g's first stage ("drop the failed
+-- characters") meaningful.
+isr.add_char = function(s, ch)
+	s.str = s.str .. ch
+	if s.failing then
+		isr.update(s)
+		return
+	end
+	if s.dir > 0 then
+		-- Forward: the longer match may still start where this one does, so the
+		-- search resumes from the START of the current match.
+		local bl, bc = point()
+		if s.match then
+			bl, bc = s.match.line, s.match.col
+		end
+		isr.apply(s, isr.locate(s, bl, bc))
+		isr.update(s)
+		return
+	end
+
+	-- Backward: adding a character extends the match to the RIGHT, so a match
+	-- that still starts where this one does is kept in place and point does not
+	-- move -- provided it does not reach past the search origin or the barrier.
+	local fold = isr.fold_case(s.str)
+	local needle = isr.fold_runes(runes_of(s.str), fold)
+	if s.match then
+		local hay = isr.fold_runes(line_runes(s.match.line), fold)
+		local limit = isr.min_pos(s.origin, s.barrier)
+		local endc = s.match.col + #needle
+		if
+			isr.match_at(hay, needle, s.match.col)
+			and not isr.pos_before(limit.line, limit.col, s.match.line, endc)
+		then
+			s.match.len = #needle
+			s.failing = false
+			isr.update(s)
+			return
+		end
+		local base = isr.min_pos(limit, { line = s.match.line, col = s.match.col + s.match.len + 1 })
+		isr.apply(s, isr.locate(s, base.line, base.col))
+	else
+		local bl, bc = point()
+		isr.apply(s, isr.locate(s, bl, bc))
+	end
+	isr.update(s)
+end
+
+-- C-s / C-r with a search already running: repeat, wrap, or turn around.
+isr.repeat_search = function(s, dir)
+	local bl, bc = point()
+	if s.dir ~= dir then
+		-- Changing direction does not search anywhere new: it flips the
+		-- direction and searches again from point, which lands on the SAME match
+		-- from its other end (isearch-repeat sets isearch-success t and leaves
+		-- the wrapped flag alone).
+		s.dir = dir
+		s.failing = false
+	elseif s.str == "" then
+		-- An empty search string reuses the last one, and then searches for it
+		-- from point. With no previous string Emacs reports an error and stays
+		-- put; there is nothing else it could do.
+		if not state.isearch_last or state.isearch_last == "" then
+			isr.update(s)
+			return
+		end
+		s.str = state.isearch_last
+	elseif s.failing then
+		-- Repeating a failing search wraps to the far end of the buffer and
+		-- searches from there. If THAT fails too, point stays where it was.
+		s.wrapped = true
+		if dir > 0 then
+			bl, bc = 1, 1
+		else
+			bl = line_count()
+			bc = line_len(bl) + 1
+		end
+	end
+
+	s.barrier = { line = bl, col = bc }
+	if s.str == "" then
+		s.failing = false
+	else
+		isr.apply(s, isr.locate(s, bl, bc))
+	end
+	isr.update(s)
+end
+
+-- DEL: undo the last isearch command. The floor state (pushed when the search
+-- started) is never popped -- Emacs just dings there.
+isr.del = function(s)
+	if #s.stack <= 1 then
+		return
+	end
+	table.remove(s.stack)
+	isr.restore(s, s.stack[#s.stack])
+end
+
+-- Leaving the search. `abort` is C-g's second stage: point goes back to where
+-- the search started and the string is not remembered.
+--
+-- Otherwise, and this is `isearch-done`: a search that MOVED point pushes the
+-- mark where it started, so C-x C-x jumps back -- but not when a region is
+-- already live, because pushing would move the mark out from under it.
+isr.finish = function(abort)
+	local s = state.isearch
+	state.isearch = nil
+	editor.clear_search()
+	if not abort and s.str ~= "" then
+		state.isearch_last = s.str
+	end
+	if abort then
+		goto_point(s.origin.line, s.origin.col)
+		sync_region()
+		echo("Quit")
+		return
+	end
+	local l, c = point()
+	if (l ~= s.origin.line or c ~= s.origin.col) and not state.mark_active then
+		push_mark(s.origin.line, s.origin.col, false)
+		echo("Mark saved where search started")
+	else
+		clear_echo()
+	end
+end
+
+-- C-g, in two stages (isearch-abort). A FAILING search rubs out the characters
+-- that made it fail and stays in the search; a succeeding one aborts outright.
+isr.quit = function(s)
+	if not s.failing then
+		isr.finish(true)
+		return
+	end
+	while #s.stack > 1 and s.stack[#s.stack].failing do
+		table.remove(s.stack)
+	end
+	isr.restore(s, s.stack[#s.stack])
+end
+
+-- The isearch keymap. Everything else exits and is executed normally.
+isr.key = function(tok)
+	local s = state.isearch
+	if tok == "ctrl-s" then
+		isr.repeat_search(s, 1)
+	elseif tok == "ctrl-r" then
+		isr.repeat_search(s, -1)
+	elseif tok == "backspace" then
+		isr.del(s)
+	elseif tok == "enter" or tok == "esc" then
+		isr.finish(false)
+	elseif tok == "ctrl-g" then
+		isr.quit(s)
+	elseif is_char_token(tok) then
+		isr.add_char(s, tok)
+	else
+		-- Not ours: end the search, then let the key run as if it had been typed
+		-- outside one. The teardown happens FIRST so this cannot recurse, and the
+		-- result is passed through so a key ttt owns still reaches the editor.
+		isr.finish(false)
+		return dispatch(tok)
+	end
+	state.last_command = "isearch"
+	state.last_kill = false
+	render_status()
+	return true
+end
+
+cmds.isearch_forward = function()
+	isr.begin(1)
+end
+
+cmds.isearch_backward = function()
+	isr.begin(-1)
+end
+
+-- ---------------------------------------------------------------------------
+-- Section 13: Keymap trie and dispatcher
 --
 -- THE DISPATCHER IS A TRIE, NOT A MODE MACHINE. Each node is either a command
 -- ({ name, run }) or a keymap ({ prefix, map }). A keystroke either descends
@@ -1543,6 +1996,11 @@ local REGION_KEEP = {
 	["set-mark-command"] = true,
 	["exchange-point-and-mark"] = true,
 	["mark-whole-buffer"] = true,
+	-- Starting a search must not disturb a live region: verified against 27.1,
+	-- `C-SPC M-f C-s g a RET` leaves the region active with the mark still where
+	-- C-SPC put it, and the highlight follows point to the match.
+	["isearch-forward"] = true,
+	["isearch-backward"] = true,
 }
 
 -- Consecutive kills accumulate into one kill-ring entry. There is no table for
@@ -1656,11 +2114,12 @@ local KEYMAP = {
 	["ctrl-x"] = P("C-x", CTRL_X_MAP),
 	["ctrl-h"] = P("C-h", HELP_MAP),
 
-	-- TODO: search and replace. Both want a live prompt in the echo area that
-	-- keeps receiving keys (C-s C-s repeats, C-g aborts, DEL backtracks), which
-	-- is exactly why the echo area is the status bar and not ttt.command_line.
-	["ctrl-s"] = TODO("isearch-forward", "use Ctrl+F (find) for now"),
-	["ctrl-r"] = TODO("isearch-backward", "use Ctrl+F (find) for now"),
+	-- Search. The live prompt lives in the echo area (Section 12) so that the
+	-- plugin keeps receiving keys: C-s C-s repeats, C-g aborts, DEL backtracks.
+	-- Once a search is running the dispatcher routes every key to isr.key
+	-- BEFORE it reaches this table, so these two entries only ever start one.
+	["ctrl-s"] = C("isearch-forward", cmds.isearch_forward),
+	["ctrl-r"] = C("isearch-backward", cmds.isearch_backward),
 	["alt-%"] = TODO("query-replace", "use Ctrl+R (replace) for now"),
 	-- M-x IS the command palette: an overlay with completion over every command,
 	-- dismissed with Escape. Same reasoning as C-x C-f above.
@@ -1764,6 +2223,13 @@ end
 -- The single entry point for a canonical token, whether it came from a real
 -- keystroke or from a macro replay.
 dispatch = function(tok)
+	-- An incremental search owns every key while it is running (Section 12),
+	-- including the ones this table would otherwise claim. Keys it does not
+	-- handle end the search and come straight back here.
+	if state.isearch then
+		return isr.key(tok)
+	end
+
 	-- C-q: the next key goes in literally.
 	if state.quoted then
 		state.quoted = false
@@ -1910,7 +2376,7 @@ local function on_key(ev)
 end
 
 -- ---------------------------------------------------------------------------
--- Section 13: Registration and deferred startup
+-- Section 14: Registration and deferred startup
 -- ---------------------------------------------------------------------------
 
 local function enable()
@@ -1923,6 +2389,11 @@ end
 
 local function disable()
 	state.enabled = false
+	-- Turning the plugin off mid-search would otherwise leave the prompt and the
+	-- match highlight on screen with nothing left to dismiss them.
+	if state.isearch then
+		isr.finish(true)
+	end
 	deactivate_mark()
 	render_status()
 end

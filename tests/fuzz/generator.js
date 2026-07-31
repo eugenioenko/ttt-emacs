@@ -56,30 +56,49 @@ function killYank(rng) {
   return out;
 }
 
+// One complete incremental search, emitted as a single COMPOUND token (see
+// keys.js `parseCompound`): a loose `C-s` would leave both editors mid-search,
+// but a search carrying its own terminator is deterministic. The optional third
+// key repeats or turns the search around before it ends, which is where the
+// interesting semantics live — wrapping after a failure, and landing on the
+// other end of the same match after a direction change.
+function isearch(rng) {
+  const dir = chance(rng, 0.35) ? "C-r" : "C-s";
+  const parts = [dir, pick(rng, A.SEARCH_STRINGS)];
+  if (chance(rng, 0.35)) {
+    parts.push(chance(rng, 0.6) ? dir : dir === "C-s" ? "C-r" : "C-s");
+  }
+  parts.push("RET");
+  return [parts.join(" ")];
+}
+
 // One complete action.
 function action(rng) {
   const r = rng();
 
-  // 30%: bare movement burst (positions point for whatever comes next)
-  if (r < 0.3) return movement(rng);
+  // 28%: bare movement burst (positions point for whatever comes next)
+  if (r < 0.28) return movement(rng);
 
-  // 20%: kill / yank
-  if (r < 0.5) return killYank(rng);
+  // 19%: kill / yank
+  if (r < 0.47) return killYank(rng);
 
-  // 14%: mark + region command
-  if (r < 0.64) return regionAction(rng);
+  // 13%: mark + region command
+  if (r < 0.6) return regionAction(rng);
 
-  // 14%: type some text
-  if (r < 0.78) return typing(rng);
+  // 12%: type some text
+  if (r < 0.72) return typing(rng);
 
-  // 10%: case transform, sometimes repeated across consecutive words
-  if (r < 0.88) {
+  // 9%: case transform, sometimes repeated across consecutive words
+  if (r < 0.81) {
     const c = pick(rng, A.keys(A.CASE));
     return chance(rng, 0.4) ? [c, c] : [c];
   }
 
   // 7%: transpose / open-line
-  if (r < 0.95) return [pick(rng, ["C-t", "C-o"])];
+  if (r < 0.88) return [pick(rng, ["C-t", "C-o"])];
+
+  // 7%: an incremental search
+  if (r < 0.95) return isearch(rng);
 
   // 5%: undo, sometimes chained (consecutive C-/ must keep walking back)
   return chance(rng, 0.4) ? ["C-/", "C-/"] : ["C-/"];
