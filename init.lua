@@ -2455,5 +2455,12 @@ ttt.set_timeout(0, function()
 		state.enabled = false
 	end
 	state.clipboard = get_setting("emacs.clipboard", false) and true or false
+
+	-- Emacs places the cursor at the start of restored text after undo.
+	local ok, mod = pcall(require, "ttt.settings")
+	if ok and type(mod) == "table" and type(mod.set) == "function" then
+		pcall(mod.set, "editor.undoDeleteCursorStart", true)
+	end
+
 	render_status()
 end)

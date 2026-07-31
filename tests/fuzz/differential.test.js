@@ -95,8 +95,10 @@ const CASES = [
 
   // --- undo ---
   // A run of self-inserts coalesces into one undo step, as in Emacs. Undo after
-  // a *kill* does not — those cases are in KNOWN_DIVERGENCES below.
+  // a kill works with editor.undoDeleteCursorStart (ttt >= PR #430).
   { name: "typing then undo (a b c C-/)", tokens: ["a", "b", "c", "C-/"] },
+  { name: "kill word then undo (M-d C-/)", tokens: ["M-d", "C-/"] },
+  { name: "consecutive undo walks back (M-d M-d C-/ C-/)", tokens: ["M-d", "M-d", "C-/", "C-/"] },
 
   // --- error outcomes: the command signals, the buffer must be unchanged ---
   { name: "backward char at point-min errors and continues (C-b C-b x)", tokens: ["C-b", "C-b", "x"] },
@@ -105,27 +107,10 @@ const CASES = [
   { name: "forward char past point-max errors (M-> C-f C-f)", tokens: ["M->", "C-f", "C-f"] },
 ];
 
-// Divergences that are genuine but not yet fixed. These assert that ttt-emacs
-// currently DIFFERS from Emacs, so the suite stays green while documenting the
-// gap. When ttt-emacs is fixed, the assertion flips — move the case into CASES.
-//
-// One cluster is left: undo after a kill. (The empty-region cluster was fixed
-// and its cases are asserted positively above.)
-//
-// Undo after a kill. `C-/` and `C-x u` delegate to editor.undo, whose undo-step
-// boundaries are ttt's own. Emacs coalesces a run of self-inserts into one unit
-// (which ttt matches — see CASES) and a run of kills into one, restoring point
-// to the change site; undo after a kill is where the two disagree, in both text
-// and point. Closing this means reimplementing Emacs's boundary rules against a
-// stack the plugin does not own. See REFERENCE.md "Known gaps".
-//
-// Requires ttt >= the commit naming tcell.KeyNUL/KeyUS (PR #427); before that
-// `C-/` never reached the plugin at all and every one of these differed for an
-// unrelated reason.
-const KNOWN_DIVERGENCES = [
-  { name: "kill word then undo (M-d C-/)", tokens: ["M-d", "C-/"] },
-  { name: "consecutive undo walks back (M-d M-d C-/ C-/)", tokens: ["M-d", "M-d", "C-/", "C-/"] },
-];
+// No known divergences remain. The undo-after-kill cluster was resolved by
+// editor.undoDeleteCursorStart (ttt >= PR #430), and the empty-region cluster
+// was fixed earlier. Keep the array so the skipIf guard stays valid.
+const KNOWN_DIVERGENCES = [];
 
 function run(tokens) {
   const emacs = runEmacs(FIXTURE, tokens);

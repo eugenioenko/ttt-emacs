@@ -14,6 +14,8 @@ git clone https://github.com/eugenioenko/ttt-emacs ~/.config/ttt/plugins/ttt-ema
 cp ~/.config/ttt/plugins/ttt-emacs/keybindings.emacs.json ~/.config/ttt/keybindings.json
 ```
 
+**Restart the editor after installation** so the plugin can apply its settings.
+
 **On ttt v1.1.0 and earlier the second line is required, not optional.** ttt
 claims `C-b`, `C-p`, `C-t`, `C-q` and `M-t` for commands that register a *force
 key*, and on those versions force keys are matched before any plugin sees them.
