@@ -64,10 +64,14 @@ describe("emacs kill ring: word kills", () => {
     expect(r.text).toBe(" gammaalpha beta");
   });
 
-  it("signals at the end of the buffer", () => {
+  it("does NOT signal at the end of the buffer — it kills the EMPTY region", () => {
+    // Unlike C-k, which signals `end-of-buffer` itself before it ever calls
+    // kill-region, kill-word is (kill-region (point) (progn (forward-word arg)
+    // (point))) and forward-word merely returns nil at the buffer edge. So M-d
+    // at point-max kills nothing, quietly. Verified against Emacs 27.1.
     const r = emacs("hello", ["M->", "M-d"]);
     expect(r.text).toBe("hello");
-    expect(r.status).toContain("End of buffer");
+    expect(r.status).not.toContain("End of buffer");
   });
 
   it("kills the word before point with M-DEL", () => {
@@ -81,10 +85,38 @@ describe("emacs kill ring: word kills", () => {
     expect(r.text).toBe(" gammaalpha beta");
   });
 
-  it("signals at the beginning of the buffer", () => {
+  it("does NOT signal at the beginning of the buffer either", () => {
     const r = emacs("hello", ["M-DEL"]);
     expect(r.text).toBe("hello");
-    expect(r.status).toContain("Beginning of buffer");
+    expect(r.status).not.toContain("Beginning of buffer");
+  });
+});
+
+describe("emacs kill ring: the EMPTY kill", () => {
+  // `kill-new ""` is a real ring entry. Dropping empty kills instead would make
+  // the NEXT C-y yank the previous entry — a whole line of text appearing from
+  // nowhere — which is what these pin down. All four verified against Emacs 27.1
+  // (tests/fuzz/differential.test.js runs the first two through the oracle).
+  it("M-d at point-max pushes an empty entry, so a following C-y yanks nothing", () => {
+    const r = emacs(TWO, ["C-k", "M->", "M-d", "C-y"]);
+    expect(r.text).toBe("\nworld"); // NOT "\nworldhello"
+  });
+
+  it("M-w on an empty region pushes an empty entry", () => {
+    const r = emacs(TWO, ["C-k", "M->", "C-SPC", "M-w", "C-y"]);
+    expect(r.text).toBe("\nworld");
+  });
+
+  it("C-w on an empty region pushes an empty entry", () => {
+    const r = emacs(TWO, ["C-k", "M->", "C-SPC", "C-w", "C-y"]);
+    expect(r.text).toBe("\nworld");
+  });
+
+  it("an empty kill appended to a chain leaves the entry alone", () => {
+    // M-DEL stores "beta"; the M-d that follows chains onto it and appends "",
+    // so the entry is still "beta" and C-y yanks it back.
+    const r = emacs("alpha beta", ["M->", "M-DEL", "M-d", "M-<", "C-y"]);
+    expect(r.text).toBe("betaalpha ");
   });
 });
 

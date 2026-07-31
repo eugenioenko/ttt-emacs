@@ -795,10 +795,11 @@ local function clipboard_copy(sl, sc, el, ec)
 	editor.set_cursor(l, c)
 end
 
+-- An EMPTY kill is a real kill-ring entry: `(kill-new "")` pushes "", and a
+-- following C-y yanks nothing instead of re-yanking the previous entry. Dropping
+-- empty kills here would make `M-d` at point-max (or `M-w` on an empty region)
+-- paste a whole line out of nowhere. Verified against Emacs 27.1.
 local function kill_push(text)
-	if text == "" then
-		return
-	end
 	table.insert(state.kill_ring, 1, text)
 	while #state.kill_ring > KILL_MAX do
 		table.remove(state.kill_ring)
@@ -813,9 +814,6 @@ end
 -- `M-w C-k` leaves two separate entries while `C-k M-w` makes one. Verified
 -- against Emacs 27.1.
 local function kill_save(text, prepend, range, quiet)
-	if text == "" then
-		return
-	end
 	if state.last_kill then
 		if not state.kill_ring[1] then
 			-- Emacs quirk, reproduced on purpose: kill-append onto an EMPTY ring
@@ -836,7 +834,10 @@ local function kill_save(text, prepend, range, quiet)
 	if not quiet then
 		state.this_kill = true -- ⇔ (setq this-command 'kill-region)
 	end
-	if state.clipboard and range then
+	-- An empty kill has nothing to mirror, and asking ttt to copy an empty
+	-- selection is not the same no-op (editor.copy with no selection takes the
+	-- whole line), so the clipboard is left alone.
+	if state.clipboard and range and text ~= "" then
 		clipboard_copy(range[1], range[2], range[3], range[4])
 	end
 end
@@ -1054,9 +1055,18 @@ end
 -- is `delete-char`, which has no such case; only DEL and <delete>
 -- (delete-forward-char) do. Missing this makes any C-SPC ... DEL sequence
 -- diverge wildly, since Emacs eats the whole region.
+--
+-- An EMPTY active region is not a region: `use-empty-active-region` is nil, so
+-- `region-active-p` is false for delete-backward-char's purposes and DEL deletes
+-- the character before point as if nothing were marked (the mark stays where it
+-- is; the edit deactivates it, as any buffer modification does). Verified
+-- against Emacs 27.1 with `C-f C-SPC DEL`.
 local function delete_active_region()
 	local sl, sc, el, ec = region_bounds()
 	if not sl then
+		return false
+	end
+	if sl == el and sc == ec then
 		return false
 	end
 	edit(function()
@@ -1296,13 +1306,16 @@ cmds.open_line = function(n)
 	end)
 end
 
+-- Unlike C-k (which signals `end-of-buffer` itself, before it ever reaches
+-- kill-region), the word kills do NOT signal when there is no word left:
+-- `kill-word` is (kill-region (point) (progn (forward-word arg) (point))) and
+-- forward-word simply returns nil at the buffer edge. So M-d at point-max and
+-- M-DEL at point-min kill the EMPTY region -- a real kill-ring entry, so the
+-- next C-y yanks nothing -- and deactivate the mark like any other kill.
+-- Verified against Emacs 27.1.
 cmds.kill_word = function(n)
 	local l, c = point()
 	local el, ec = forward_word_pos(l, c, math.max(1, n))
-	if el == l and ec == c then
-		signal("End of buffer")
-		return
-	end
 	local text = region_string(l, c, el, ec)
 	edit(function()
 		kill_save(text, false, { l, c, el, ec })
@@ -1314,10 +1327,6 @@ end
 cmds.backward_kill_word = function(n)
 	local l, c = point()
 	local sl, sc = backward_word_pos(l, c, math.max(1, n))
-	if sl == l and sc == c then
-		signal("Beginning of buffer")
-		return
-	end
 	local text = region_string(sl, sc, l, c)
 	edit(function()
 		kill_save(text, true, { sl, sc, l, c })

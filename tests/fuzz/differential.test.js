@@ -47,6 +47,22 @@ const CASES = [
   { name: "exchange point and mark (C-SPC M-f C-x C-x)", tokens: ["C-SPC", "M-f", "C-x C-x"] },
   { name: "multi-line region kill (C-SPC C-n C-n C-w)", tokens: ["C-SPC", "C-n", "C-n", "C-w"] },
 
+  // --- the EMPTY region and the EMPTY kill (found by the widened alphabet) ---
+  // Surfaced as divergences by seeds 52, 81 and 143 of the 200-seed run, then
+  // minimized to these three and fixed.
+  //
+  // `use-empty-active-region` is nil, so an EMPTY active region is not a region
+  // as far as delete-backward-char is concerned: DEL deletes the character
+  // before point, as if no region were active.
+  { name: "DEL with an EMPTY active region deletes a character (C-f C-SPC DEL)", tokens: ["C-f", "C-SPC", "DEL"] },
+  // An empty kill is still a kill-ring entry (`kill-new ""`), so the C-y that
+  // follows yanks NOTHING rather than re-yanking the previous entry. M-d at
+  // point-max does not signal — it kills the empty region and the ring head
+  // becomes "".
+  { name: "M-d at point-max pushes an empty kill (C-k M-> M-d C-y)", tokens: ["C-k", "M->", "M-d", "C-y"] },
+  { name: "M-w on an empty region pushes an empty kill", tokens: ["C-k", "M->", "C-SPC", "M-w", "C-y"] },
+  { name: "C-w on an empty region pushes an empty kill", tokens: ["C-k", "M->", "C-SPC", "C-w", "C-y"] },
+
   // --- case ---
   { name: "upcase word (M-u)", tokens: ["M-u"] },
   { name: "downcase word (C-n M-l)", tokens: ["C-n", "M-l"] },
@@ -93,8 +109,8 @@ const CASES = [
 // currently DIFFERS from Emacs, so the suite stays green while documenting the
 // gap. When ttt-emacs is fixed, the assertion flips — move the case into CASES.
 //
-// Two clusters: undo after a kill (below), and the empty region (further
-// down, found by the widened alphabet).
+// One cluster is left: undo after a kill. (The empty-region cluster was fixed
+// and its cases are asserted positively above.)
 //
 // Undo after a kill. `C-/` and `C-x u` delegate to editor.undo, whose undo-step
 // boundaries are ttt's own. Emacs coalesces a run of self-inserts into one unit
@@ -109,32 +125,6 @@ const CASES = [
 const KNOWN_DIVERGENCES = [
   { name: "kill word then undo (M-d C-/)", tokens: ["M-d", "C-/"] },
   { name: "consecutive undo walks back (M-d M-d C-/ C-/)", tokens: ["M-d", "M-d", "C-/", "C-/"] },
-
-  // --- the EMPTY region, found by the widened (isearch) alphabet -----------
-  //
-  // These three are NOT isearch divergences — they were surfaced by seeds 52,
-  // 81 and 143 of the 200-seed run, and each still diverges with every isearch
-  // token stripped out. They are pinned here, minimized, rather than fixed in
-  // the isearch change: both live in the kill-ring / region semantics, which
-  // have their own fuzz-verified rules (see REFERENCE.md).
-  //
-  // 1. `use-empty-active-region` is nil, so an EMPTY active region is not a
-  //    region as far as `delete-backward-char` is concerned: DEL deletes the
-  //    character before point, as if no region were active. ttt-emacs takes the
-  //    delete-active-region path for any active region, empty or not, and so
-  //    deletes nothing. Fix: make delete_active_region refuse an empty range.
-  { name: "DEL with an EMPTY active region deletes a character (C-f C-SPC DEL)", tokens: ["C-f", "C-SPC", "DEL"] },
-  //
-  // 2. and 3. An empty kill still pushes onto the kill ring. `kill-new ""` is a
-  //    real entry, so a following C-y yanks NOTHING; ttt-emacs drops empty
-  //    kills (kill_push / kill_save return early on "") and C-y then yanks
-  //    whatever was killed before, which is a whole line of text out of
-  //    nowhere. `M-d` at point-max is the same story from the other end: Emacs
-  //    does not signal there, it kills the empty region and the ring head
-  //    becomes "". Fix: let "" into the ring, and stop kill_word signalling at
-  //    point-max.
-  { name: "M-d at point-max pushes an empty kill (C-k M-> M-d C-y)", tokens: ["C-k", "M->", "M-d", "C-y"] },
-  { name: "M-w on an empty region pushes an empty kill", tokens: ["C-k", "M->", "C-SPC", "M-w", "C-y"] },
 ];
 
 function run(tokens) {
