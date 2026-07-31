@@ -51,6 +51,23 @@ describe("emacs undo: C-x u", () => {
   });
 });
 
+describe("emacs undo: cursor position after undo", () => {
+  it("places cursor at start of restored text after undoing a kill", () => {
+    // M-d kills "alpha", undo restores it. Emacs places point at col 1 (start
+    // of "alpha"), not col 6 (end). Requires editor.undoDeleteCursorStart.
+    const r = emacs("alpha beta gamma", ["M-d", "C-/"]);
+    expect(r.text).toBe("alpha beta gamma");
+    expect(r.point).toBe("1:1");
+  });
+
+  it("places cursor at start after undoing a region kill", () => {
+    // C-SPC M-f C-w kills "alpha", undo restores it at point 1:1.
+    const r = emacs("alpha beta gamma", ["C-SPC", "M-f", "C-w", "C-/"]);
+    expect(r.text).toBe("alpha beta gamma");
+    expect(r.point).toBe("1:1");
+  });
+});
+
 describe("emacs undo: C-/", () => {
   // Requires ttt >= the commit naming tcell.KeyNUL/KeyUS (PR #427). Before it,
   // comboToTcell encoded ctrl+space as KeyNUL and ctrl+/ as KeyUS, neither of

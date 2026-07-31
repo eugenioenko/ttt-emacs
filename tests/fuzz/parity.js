@@ -32,6 +32,7 @@ export const TTT_SETTINGS = {
     // dump), pinned only so a future save-based case
     // starts from a known model.
     trimTrailingWhitespace: false, // Emacs never trims
+    undoDeleteCursorStart: true, // ⇔ Emacs places point at the start of restored text after undo
     wordWrap: false, // point ↔ (line, col) must not depend on wrapping
     lineNumbers: false, // no effect on state
     syntaxHighlight: false, // no effect on state; keeps the run cheap

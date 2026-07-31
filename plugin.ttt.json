@@ -15,7 +15,8 @@
     "settings": true,
     "settings_keys": [
       "emacs.enabled",
-      "emacs.clipboard"
+      "emacs.clipboard",
+      "editor.undoDeleteCursorStart"
     ]
   }
 }
