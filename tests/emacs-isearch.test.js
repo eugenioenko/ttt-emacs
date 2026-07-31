@@ -272,3 +272,32 @@ describe("isearch: multi-byte lines", () => {
     expect(r.point).toBe("1:12");
   });
 });
+
+// Emacs clears the echo area when you type the next command, unless that
+// command writes its own message. Only run_node used to clear it, so a message
+// survived self-insert, pass-through keys and prefix descent -- you could type a
+// whole paragraph with "Mark saved where search started" still on screen.
+describe("isearch: the message does not outlive the next command", () => {
+  const SEARCH = ["C-s", text("gam"), "RET"];
+
+  it("shows the message on exit", () => {
+    const r = emacs(FIXTURE, [...SEARCH, probe()]);
+    expect(r.probes[0].status).toContain("Mark saved where search started");
+  });
+
+  it("a self-inserting key clears it", () => {
+    const r = emacs(FIXTURE, [...SEARCH, text("X"), probe()]);
+    expect(r.probes[0].status).not.toContain("Mark saved");
+  });
+
+  it("a pass-through key clears it", () => {
+    const r = emacs(FIXTURE, [...SEARCH, "<right>", probe()]);
+    expect(r.probes[0].status).not.toContain("Mark saved");
+  });
+
+  it("descending into a prefix clears it and shows the prefix instead", () => {
+    const r = emacs(FIXTURE, [...SEARCH, "C-x", probe(), "C-g"]);
+    expect(r.probes[0].status).not.toContain("Mark saved");
+    expect(r.probes[0].status).toContain("C-x-");
+  });
+});

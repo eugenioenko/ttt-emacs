@@ -2207,6 +2207,7 @@ local function run_node(node, tok)
 	if node.map then
 		state.map = node.map
 		state.path[#state.path + 1] = tok
+		state.echo_msg = nil
 		render_status()
 		return true
 	end
@@ -2332,6 +2333,10 @@ dispatch = function(tok)
 	if is_char_token(tok) then
 		local n, explicit = arg_value()
 		arg_reset()
+		-- Same as run_node: the next command clears the echo area. Without this a
+		-- message ("Mark saved where search started") survives arbitrary typing,
+		-- because self-insert does not go through run_node.
+		state.echo_msg = nil
 		if explicit and n > 1 then
 			local l, c = point()
 			edit(function()
@@ -2355,6 +2360,7 @@ dispatch = function(tok)
 	deactivate_mark()
 	state.last_command = nil
 	state.last_kill = false
+	state.echo_msg = nil
 	render_status()
 	return false
 end
