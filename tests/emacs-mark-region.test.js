@@ -114,6 +114,23 @@ describe("emacs region: deletion", () => {
     expect(r.point).toBe("1:6");
   });
 
+  it("DEL with an EMPTY active region deletes the character before point", () => {
+    // `use-empty-active-region` is nil, so an empty region is not a region as far
+    // as delete-backward-char is concerned: DEL behaves as if nothing were
+    // marked, rather than deleting the (empty) region and so nothing at all.
+    // Verified against Emacs 27.1; also asserted through the oracle in
+    // tests/fuzz/differential.test.js.
+    const r = emacs(HELLO, ["C-f", "C-SPC", "DEL"]);
+    expect(r.text).toBe("ello world");
+    expect(r.point).toBe("1:1");
+  });
+
+  it("DEL with an empty region at point-min still signals", () => {
+    const r = emacs(HELLO, ["C-SPC", "DEL"]);
+    expect(r.text).toBe(HELLO);
+    expect(r.status).toContain("Beginning of buffer");
+  });
+
   it("typing with a live region inserts at point instead of replacing it", () => {
     // The plugin deactivates the mark before a self-inserting key falls through,
     // which is what keeps ttt from replacing the selection.

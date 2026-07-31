@@ -81,9 +81,21 @@ export function pause(ms = 100) {
 
 // The status bar is the only rendering of the echo area, and it is the screen
 // line carrying the core position segment.
+//
+// The position segment is not guaranteed to be there: the status bar drops
+// right-hand segments when the left side is long, and the left side is the echo
+// message PLUS the git branch name — so a long message under a long branch name
+// evicts "Ln n, Col n" entirely. When that happens the status bar is still the
+// last non-empty screen line, so fall back to it rather than reporting no echo
+// area at all (which used to make the stub tests fail purely because of the
+// checked-out branch's name).
 function statusOf(screen) {
-  for (const line of screen.split("\n")) {
+  const lines = screen.split("\n");
+  for (const line of lines) {
     if (/Ln \d+, Col \d+/.test(line)) return line;
+  }
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].trim()) return lines[i];
   }
   return "";
 }
