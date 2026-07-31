@@ -1,0 +1,21 @@
+{
+  "name": "emacs",
+  "displayName": "Emacs Mode",
+  "description": "Emacs compatibility layer: prefix keymaps, the mark and region, the kill ring, the universal argument and keyboard macros.",
+  "version": "0.1.0",
+  "author": "ttt",
+  "entry": "init.lua",
+  "api": 2,
+  "permissions": {
+    "keybindings": true,
+    "editor.read": true,
+    "editor.write": true,
+    "commands": true,
+    "fs.write": true,
+    "settings": true,
+    "settings_keys": [
+      "emacs.enabled",
+      "emacs.clipboard"
+    ]
+  }
+}

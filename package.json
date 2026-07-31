@@ -1,0 +1,18 @@
+{
+  "name": "ttt-emacs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Emacs compatibility layer for the ttt editor, as a Lua plugin.",
+  "scripts": {
+    "prepare-ttt": "bash scripts/prepare-ttt.sh",
+    "pretest": "npm run prepare-ttt",
+    "test": "vitest run --root tests",
+    "fuzz": "node tests/fuzz/fuzz.mjs",
+    "fuzz:shrink": "node tests/fuzz/shrink.mjs",
+    "fuzz:repro": "node tests/fuzz/repro.mjs"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.7"
+  }
+}

@@ -1,0 +1,38 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Emacs (differential fuzzer oracle)
+        # tests/fuzz compares ttt-emacs against real GNU Emacs driven headlessly
+        # via `emacs -Q --batch`, so the suite needs `emacs` on PATH. No display
+        # is required.
+        run: sudo apt-get update && sudo apt-get install -y emacs-nox
+
+      - name: Install test deps
+        run: npm ci
+
+      - name: Build ttt and run the plugin suite
+        # prepare-ttt clones ttt @ TTT_REF (default main) and builds it, so the
+        # binary always matches the ttt it is tested against.
+        env:
+          TTT_REF: main
+        run: npm test

@@ -1,0 +1,7 @@
+{
+  "command.palette": "f5",
+  "terminal.fullscreen": "f7",
+  "terminal.toggle": "f8",
+  "sidebar.toggle": "f9",
+  "editor.quit": "f4"
+}
