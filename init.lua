@@ -2508,6 +2508,13 @@ local function on_key(ev)
 		return false
 	end
 
+	-- Clear any transient echo message on the next keystroke (matching
+	-- Emacs's echo area dismissal). Active prompts (isearch) manage their
+	-- own echo lifecycle and are left alone.
+	if state.echo_msg and not state.isearch then
+		clear_echo()
+	end
+
 	local tok = token_of(ev)
 	local was_recording = state.macro.recording
 
