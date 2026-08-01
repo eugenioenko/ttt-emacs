@@ -387,54 +387,27 @@ never around a call that runs a core command — core opens its own.
   `tcell.KeyUS`, neither of which has an entry in `tcell.KeyNames`, so
   `internal/plugin/event_convert.go` reports **both** as `key="unknown"` and the
   plugin cannot tell them apart. `C-SPC` wins, because undo also has `C-x u`.
-  Real terminals are unaffected: tcell's legacy decoder delivers `ctrl+space` as
-  rune `" "` and `ctrl+/` as rune `"_"`, both with `ModCtrl`, and the kitty
-  protocol is likewise unambiguous — the plugin handles all of those spellings.
-  A six-line core fix would clear it, and `token_of` already accepts the result:
 
-  ```go
-  // internal/plugin/event_convert.go
-  name := tcell.KeyNames[e.Key()]
-  if name == "" {
-      switch e.Key() {
-      case tcell.KeyNUL:
-          name = "Ctrl-Space"
-      case tcell.KeyUS:
-          name = "Ctrl-/"
-      default:
-          name = "unknown"
-      }
-  }
-  ```
-
-  This shipped as ttt PR #427, which names them for the ttt keybinding spelling
-  (`ctrl+space`, `ctrl+/`) rather than Emacs's `C-_`, so a plugin keymap written
-  against ttt's own vocabulary round-trips. Until you are on a ttt carrying it,
-  the differential fuzzer cannot exercise `C-/` and every generated sequence
-  containing it reports a divergence.
+  **Fixed by ttt PR #427**, which names `KeyNUL` → `"Ctrl-Space"` and `KeyUS` →
+  `"Ctrl-/"`. On a ttt carrying it, the fuzzer can exercise `C-/` and the
+  `token_of` normalizer already accepts both spellings. Real terminals are
+  likewise unambiguous under both the legacy and kitty-protocol decoders.
 - **Undo boundaries do not match Emacs after a kill.** `C-/` and `C-x u`
   delegate to `editor.undo`, and ttt's notion of an undo step is its own. A run
   of self-inserts coalesces correctly — `a b c C-/` restores the buffer in one
   step and leaves point where Emacs leaves it — but undo *after a kill* drifts,
-  in both the resulting text and point. Measured over 200 fuzz seeds on a ttt
-  carrying #427: 164 matched, 36 diverged, and 33 of the 36 contain `C-/`.
-  Closing this means
-  reimplementing Emacs's undo-boundary rules against a stack the plugin does not
-  own, so it is deliberately not attempted. The affected cases are pinned in
-  `tests/fuzz/differential.test.js` under `KNOWN_DIVERGENCES`.
-- **The empty region is not treated as Emacs treats it.** The other 3 of those
-  36 seeds, minimized and pinned alongside the undo cases. Neither has anything
-  to do with isearch — both still diverge with the search tokens stripped out —
-  and both live in rules this document already states, one step further:
-  - `use-empty-active-region` is nil, so an **empty** active region is not a
-    region for `delete-backward-char`: `C-f C-SPC DEL` deletes the character
-    before point. ttt-emacs takes the delete-active-region path for any active
-    region and so deletes nothing.
-  - **An empty kill is still a kill-ring entry.** `kill-new ""` pushes, so
-    `C-y` after one yanks *nothing*; ttt-emacs drops empty kills and `C-y` then
-    yanks the previous entry — a whole line appearing out of nowhere. `M-d` at
-    `point-max` is the same story from the other side: Emacs does not signal
-    there, it kills the empty region and the ring head becomes `""`.
+  in both the resulting text and point. Measured over 200 fuzz seeds: most
+  divergences contain `C-/`. Closing this means reimplementing Emacs's
+  undo-boundary rules against a stack the plugin does not own, so it is
+  deliberately not attempted. Accepted divergences are tracked in
+  `tests/fuzz/reports/` and in the CI allowlist (`known-divergences.json`).
+- **The empty region and empty kill are handled correctly** (fixed). The
+  `delete_active_region` helper returns false for a zero-width region (so
+  `C-f C-SPC DEL` deletes the character before point, matching Emacs's
+  `use-empty-active-region` nil), and `kill_push` stores empty kills as real
+  kill-ring entries. Both are verified against Emacs 27.1 and covered by
+  differential test cases.
+- **isearch has one search string of history and none of the extras.**
 - **isearch has one search string of history and none of the extras.**
   `C-s` on an empty string reuses the last string, which is what `C-s C-s`
   needs, but there is no search *ring* (`M-p` / `M-n`), no `C-w` / `C-y` /

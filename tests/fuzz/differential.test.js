@@ -107,9 +107,10 @@ const CASES = [
   { name: "forward char past point-max errors (M-> C-f C-f)", tokens: ["M->", "C-f", "C-f"] },
 ];
 
-// No known divergences remain. The undo-after-kill cluster was resolved by
-// editor.undoDeleteCursorStart (ttt >= PR #430), and the empty-region cluster
-// was fixed earlier. Keep the array so the skipIf guard stays valid.
+// Known divergences are tracked in tests/fuzz/reports/ and the CI allowlist
+// (known-divergences.json). New minimized cases that we accept as permanently
+// divergent should be added here with the reason they differ, so the test
+// asserts the sides still differ and flips loudly when someone fixes the gap.
 const KNOWN_DIVERGENCES = [];
 
 function run(tokens) {
