@@ -257,37 +257,23 @@ local function arg_value()
 	return a.mult, true
 end
 
--- Segment IDs that ttt core owns on the status bar. When the echo area is
--- active these are removed so the echo message has the status bar to itself --
--- exactly as Emacs's echo area replaces the mode line during isearch and
--- prompts. The core re-adds them on the next event-loop tick after echo clears.
-local CORE_SEGMENTS = {
-	"branch", "position", "encoding", "eol", "indent", "language", "blame",
-}
-
 local function render_status()
 	if not status_ready() then
 		return
 	end
 	if not state.enabled then
 		ttt.remove_status_item("mode")
-		ttt.remove_status_item("echo")
 		return
 	end
 
+	-- When ttt lacks EchoText support, the echo message goes through the
+	-- status-bar segment path as a fallback.
 	if state.echo_msg then
-		-- Echo active: suppress mode-line segments so the echo message stands
-		-- alone. Core segments are removed every render pass (the core re-adds
-		-- them on each event-loop tick, so they must be cleared continuously).
-		for _, id in ipairs(CORE_SEGMENTS) do
-			ttt.remove_status_item(id)
-		end
 		ttt.remove_status_item("mode")
 		ttt.set_status_item("left", "echo", state.echo_msg, { priority = 10 })
 		return
 	end
 
-	-- Echo inactive: restore normal mode line.
 	ttt.remove_status_item("echo")
 
 	local parts = {}
@@ -312,7 +298,11 @@ end
 
 local function echo(msg)
 	state.echo_msg = msg
-	render_status()
+	local ok_set = pcall(ttt.set_echo, msg)
+	if not ok_set then
+		-- Fallback for older ttt without EchoText: use status item
+		render_status()
+	end
 end
 
 -- What Emacs does by signalling a Lisp error: say so, and change nothing else.
@@ -328,7 +318,12 @@ end
 
 local function clear_echo()
 	state.echo_msg = nil
-	render_status()
+	local ok_clear = pcall(ttt.clear_echo)
+	if ok_clear then
+		render_status() -- restore mode-line segments
+	else
+		render_status() -- fallback: status item path
+	end
 end
 
 -- ---------------------------------------------------------------------------
