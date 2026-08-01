@@ -65,10 +65,9 @@ describe("emacs commands: stubs", () => {
   // Each of these is deliberately unimplemented. They are bound anyway so the
   // key is consumed and the echo area explains itself, rather than the key
   // falling through to ttt (or, for a prefix, leaking its last character).
-  // C-s / C-r are NOT here: isearch is implemented (emacs-isearch.test.js).
+  // M-% and C-x C-w are wired to ttt dialogs (Replace, Save As) and are NOT
+  // here. C-s / C-r are NOT here: isearch is implemented.
   const STUBS = [
-    ["M-%", "query-replace"],
-    ["C-x C-w", "write-file"],
     ["C-x r k", "kill-rectangle"],
     ["C-x r y", "yank-rectangle"],
     ["C-x r s", "copy-to-register"],

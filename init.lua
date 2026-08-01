@@ -58,6 +58,7 @@ local state = {
 	path = {}, -- tokens typed to get there, e.g. { "ctrl-x", "r" }
 	arg = { active = false, mult = 4, digits = "", sign = 1 }, -- C-u
 	quoted = false, -- C-q typed, next key inserts literally
+	esc_meta = false, -- ESC typed, next key gets alt- prepended
 	last_command = nil, -- name of the previous command (kill/yank chaining)
 	last_kill = false, -- was the previous command a kill? (kills accumulate)
 	goal = nil, -- sticky column for C-n / C-p
@@ -2316,6 +2317,7 @@ HELP_MAP["ctrl-h"] = C("describe-bindings", cmds.describe_bindings)
 local function reset_pending()
 	state.map = nil
 	state.path = {}
+	state.esc_meta = false
 end
 
 local function arg_reset()
@@ -2379,6 +2381,20 @@ end
 -- The single entry point for a canonical token, whether it came from a real
 -- keystroke or from a macro replay.
 dispatch = function(tok)
+	-- ESC as Meta prefix: ESC f = M-f, ESC % = M-%. This is how terminal
+	-- users reach Meta+symbol combos that terminals can't encode directly
+	-- (Alt+Shift+5 for M-% rarely transmits). ESC at the top level with
+	-- nothing pending arms the meta prefix for the next key.
+	if tok == "esc" and not state.map and not state.quoted and not state.isearch then
+		state.esc_meta = true
+		echo("ESC-")
+		return true
+	end
+	if state.esc_meta then
+		state.esc_meta = false
+		tok = "alt-" .. tok
+	end
+
 	-- An incremental search owns every key while it is running (Section 12),
 	-- including the ones this table would otherwise claim. Keys it does not
 	-- handle end the search and come straight back here.
