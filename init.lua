@@ -2187,7 +2187,11 @@ local CTRL_X_MAP = {
 	["ctrl-f"] = C("find-file", cmds.find_file),
 	["b"] = C("switch-to-buffer", cmds.switch_to_buffer),
 	["k"] = C("kill-buffer", cmds.kill_buffer),
-	["ctrl-w"] = TODO("write-file", "use File > Save As for now"),
+	["ctrl-w"] = C("write-file", function()
+		if ttt.exec_command("file.saveAs") then
+			clear_echo()
+		end
+	end),
 }
 
 local HELP_MAP = {} -- filled in below, once describe_bindings exists
@@ -2267,7 +2271,11 @@ local KEYMAP = {
 	-- BEFORE it reaches this table, so these two entries only ever start one.
 	["ctrl-s"] = C("isearch-forward", cmds.isearch_forward),
 	["ctrl-r"] = C("isearch-backward", cmds.isearch_backward),
-	["alt-%"] = TODO("query-replace", "use Ctrl+R (replace) for now"),
+	["alt-%"] = C("query-replace", function()
+		if ttt.exec_command("search.replace") then
+			clear_echo()
+		end
+	end),
 	-- M-x IS the command palette: an overlay with completion over every command,
 	-- dismissed with Escape. Same reasoning as C-x C-f above.
 	["alt-x"] = C("execute-extended-command", cmds.execute_extended_command),
