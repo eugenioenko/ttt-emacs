@@ -68,6 +68,8 @@ local state = {
 	-- C-s C-s repeats the previous search string.
 	isearch = nil,
 	isearch_last = nil,
+	search_ring = {}, -- previous search strings, newest first, cap 16
+	search_ring_idx = 0, -- 0 = ring head, or position during M-p/M-n cycling
 }
 
 local KILL_MAX = 60
@@ -1317,6 +1319,83 @@ cmds.open_line = function(n)
 	end)
 end
 
+-- M-t: transpose the word before point with the word after point.
+-- The cursor lands just past the swapped pair, same as transpose-chars.
+-- At the edge of the buffer (no word before or after), signals.
+cmds.transpose_words = function()
+	local l, c = point()
+	local wb_l, wb_c = backward_word_pos(l, c, 1)
+	local wa_l, wa_c = forward_word_pos(l, c, 1)
+	if (wb_l == l and wb_c == c) or (wa_l == l and wa_c == c) then
+		signal("Don't have two things to transpose")
+		return
+	end
+	-- The word before extends from (wb_l, wb_c) to (l, c).
+	-- The word after extends from (l, c) to (wa_l, wa_c), including any
+	-- intervening non-word characters between the two words.
+	local mid_l, mid_c = forward_word_pos(wb_l, wb_c, 1)
+	local before = region_string(wb_l, wb_c, mid_l, mid_c)
+	local after = region_string(mid_l, mid_c, wa_l, wa_c)
+	edit(function()
+		editor.replace(wb_l, wb_c, wa_l, wa_c, after .. before)
+		local text = after .. before
+		local nl = count_newlines(text)
+		if nl == 0 then
+			goto_point(wb_l, wb_c + rune_len(text))
+		else
+			goto_point(wb_l + nl, rune_len(text:match("[^\n]*$")) + 1)
+		end
+	end)
+end
+
+-- M-\: delete all horizontal whitespace (spaces and tabs) around point.
+cmds.delete_horizontal_space = function()
+	local l, c = point()
+	local runes = line_runes(l)
+	local start_c = c
+	while start_c > 1 and (runes[start_c - 1] == " " or runes[start_c - 1] == "\t") do
+		start_c = start_c - 1
+	end
+	local end_c = c
+	while end_c <= #runes and (runes[end_c] == " " or runes[end_c] == "\t") do
+		end_c = end_c + 1
+	end
+	if start_c == end_c then return end -- nothing to delete
+	edit(function()
+		editor.replace(l, start_c, l, end_c, "")
+		goto_point(l, start_c)
+	end)
+end
+
+-- M-^: join this line with the previous line, deleting leading whitespace
+-- on the current line and inserting exactly one space when the join point
+-- is between two non-space characters.
+cmds.delete_indentation = function()
+	local l, c = point()
+	if l <= 1 then
+		signal("Beginning of buffer")
+		return
+	end
+	local prev = line_text(l - 1)
+	local curr = line_text(l)
+	local prev_len = rune_len(prev)
+	-- Leading whitespace is stripped from the current line. If the previous
+	-- line is empty, no space is inserted. Otherwise Emacs inserts a single
+	-- space between the joined text, UNLESS the previous line already ends
+	-- in whitespace or the current line is empty after stripping.
+	local leading = curr:match("^[ \t]+") or ""
+	local rest = curr:sub(#leading + 1)
+	local join = ""
+	if prev_len > 0 and #rest > 0 and not prev:match("[ \t]$") then
+		join = " "
+	end
+	edit(function()
+		editor.set_line(l - 1, prev .. join .. rest)
+		editor.replace(l, 1, l + 1, 1, "") -- delete the current line
+		goto_point(l - 1, prev_len + rune_len(join) + 1)
+	end)
+end
+
 -- Unlike C-k (which signals `end-of-buffer` itself, before it ever reaches
 -- kill-region), the word kills do NOT signal when there is no word left:
 -- `kill-word` is (kill-region (point) (progn (forward-word arg) (point))) and
@@ -1905,7 +1984,15 @@ isr.finish = function(abort)
 	editor.clear_search()
 	if not abort and s.str ~= "" then
 		state.isearch_last = s.str
+		-- Push to search ring (dedup: if it's already at index 1, skip).
+		if not state.search_ring[1] or state.search_ring[1] ~= s.str then
+			table.insert(state.search_ring, 1, s.str)
+			if #state.search_ring > 16 then
+				state.search_ring[#state.search_ring] = nil
+			end
+		end
 	end
+	state.search_ring_idx = 0
 	if abort then
 		goto_point(s.origin.line, s.origin.col)
 		sync_region()
@@ -1947,6 +2034,42 @@ isr.key = function(tok)
 		isr.finish(false)
 	elseif tok == "ctrl-g" then
 		isr.quit(s)
+	elseif tok == "alt-p" then
+		-- isearch-ring-retreat: cycle to the previous search string.
+		local ring = state.search_ring
+		if #ring == 0 then
+			echo("No previous search string")
+			return true
+		end
+		local idx = state.search_ring_idx
+		idx = (idx == 0) and 1 or math.min(idx + 1, #ring)
+		state.search_ring_idx = idx
+		s.str = ring[idx]
+		isr.repeat_search(s, s.dir) -- re-search with the ring string
+	elseif tok == "alt-n" then
+		-- isearch-ring-advance: cycle forward. At idx 0/1, restore the
+		-- original (empty) search string.
+		local ring = state.search_ring
+		local idx = state.search_ring_idx
+		if idx <= 1 then
+			state.search_ring_idx = 0
+			s.str = ""
+			isr.update(s)
+		else
+			idx = idx - 1
+			state.search_ring_idx = idx
+			s.str = ring[idx]
+			isr.repeat_search(s, s.dir)
+		end
+	elseif tok == "ctrl-w" then
+		-- isearch-yank-word: append the next word from the buffer to the
+		-- search string and re-search.
+		local l, c = point()
+		local el, ec = forward_word_pos(l, c, 1)
+		if el == l and ec == c then return true end -- nothing to yank
+		local word = region_string(l, c, el, ec)
+		s.str = s.str .. word
+		isr.repeat_search(s, s.dir)
 	elseif is_char_token(tok) then
 		isr.add_char(s, tok)
 	else
@@ -2121,6 +2244,9 @@ local KEYMAP = {
 	["alt-u"] = C("upcase-word", cmds.upcase_word),
 	["alt-l"] = C("downcase-word", cmds.downcase_word),
 	["alt-c"] = C("capitalize-word", cmds.capitalize_word),
+	["alt-t"] = C("transpose-words", cmds.transpose_words), -- key freed by overlay (terminal.fullscreen -> F7)
+	["alt-\\"] = C("delete-horizontal-space", cmds.delete_horizontal_space),
+	["alt-^"] = C("delete-indentation", cmds.delete_indentation),
 
 	-- Undo. C-/ and C-_ are the same control byte; on terminals that report it
 	-- ambiguously it is read as C-SPC instead, so C-x u is the reliable spelling.
