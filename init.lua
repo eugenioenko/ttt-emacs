@@ -2267,7 +2267,11 @@ local KEYMAP = {
 	-- BEFORE it reaches this table, so these two entries only ever start one.
 	["ctrl-s"] = C("isearch-forward", cmds.isearch_forward),
 	["ctrl-r"] = C("isearch-backward", cmds.isearch_backward),
-	["alt-%"] = TODO("query-replace", "use Ctrl+R (replace) for now"),
+	["alt-%"] = C("query-replace", function()
+		if ttt.exec_command("search.replace") then
+			clear_echo()
+		end
+	end),
 	-- M-x IS the command palette: an overlay with completion over every command,
 	-- dismissed with Escape. Same reasoning as C-x C-f above.
 	["alt-x"] = C("execute-extended-command", cmds.execute_extended_command),
