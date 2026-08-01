@@ -41,11 +41,17 @@ local state = {
 	mark_ring = {}, -- previous marks, newest first
 
 	-- Kill ring. Index 1 is the most recent kill; `kill_index` is where C-y
-	-- reads from and M-y rotates.
+	-- reads from and M-y rotates. The kill ring is GLOBAL (matches Emacs).
 	kill_ring = {},
 	kill_index = 1,
 	yank_start = nil, -- extent of the last yank, for M-y
 	yank_end = nil,
+
+	-- Per-buffer state. The mark and mark ring are per-buffer (matches Emacs);
+	-- the kill ring stays global. On tab change the current mark/mark-ring are
+	-- saved to the old buffer's slot and restored from the new buffer's slot.
+	buffer_states = {}, -- { [path] = { mark, mark_ring, mark_active } }
+	current_buffer_path = nil,
 
 	-- Dispatcher.
 	map = nil, -- the keymap we are inside, nil at top level
@@ -2598,6 +2604,66 @@ ttt.set_timeout(0, function()
 	if ok and type(mod) == "table" and type(mod.set) == "function" then
 		pcall(mod.set, "editor.undoDeleteCursorStart", true)
 	end
+
+	-- Per-buffer mark ring. The mark is per-buffer but the kill ring is global,
+	-- matching Emacs. On tab change, save the current mark state to the old
+	-- buffer and restore from the new buffer.
+	local function save_buffer_state(path)
+		if not path then return end
+		state.buffer_states[path] = {
+			mark = state.mark and { line = state.mark.line, col = state.mark.col } or nil,
+			mark_ring = {},
+			mark_active = state.mark_active,
+		}
+		for _, m in ipairs(state.mark_ring) do
+			state.buffer_states[path].mark_ring[#state.buffer_states[path].mark_ring + 1] = {
+				line = m.line, col = m.col,
+			}
+		end
+	end
+
+	local function restore_buffer_state(path)
+		local bs = path and state.buffer_states[path]
+		state.mark = nil
+		state.mark_ring = {}
+		state.mark_active = false
+		if bs then
+			if bs.mark then
+				state.mark = { line = bs.mark.line, col = bs.mark.col }
+			end
+			for _, m in ipairs(bs.mark_ring) do
+				state.mark_ring[#state.mark_ring + 1] = {
+					line = m.line, col = m.col,
+				}
+			end
+			state.mark_active = bs.mark_active
+		end
+	end
+
+	-- Initialize from the currently open file.
+	local ok_path, init_path = pcall(function() return editor.file_path() end)
+	if ok_path and type(init_path) == "string" then
+		state.current_buffer_path = init_path
+		restore_buffer_state(init_path)
+	end
+
+	-- Subscribe to tab changes for per-buffer state switching.
+	pcall(events.on, "tab.change", function(ev)
+		local new_path = ev and ev.filePath
+		if new_path and new_path ~= state.current_buffer_path then
+			save_buffer_state(state.current_buffer_path)
+			state.current_buffer_path = new_path
+			restore_buffer_state(new_path)
+			render_status()
+		end
+	end)
+	-- Clean up buffer state when a file is closed.
+	pcall(events.on, "file.close", function(ev)
+		local path = ev and ev.filePath
+		if path then
+			state.buffer_states[path] = nil
+		end
+	end)
 
 	render_status()
 end)
