@@ -101,27 +101,29 @@ export const ISEARCH = [
 // brackets/quotes/underscores that make word and syntax boundaries interesting.
 // A literal space IS included (keys.js emits it as `key space`, never inside a
 // `type` run, because --exec trims step arguments).
-export const SELF_INSERT = [..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJ0123456789 .,;:!?()[]{}\"'-_=+*/"];
+// Full ASCII printable set: lowercase, uppercase, digits, space, punctuation.
+// The corpus is stocked with symbol-syntax chars (# $ % & @ < >) specifically
+// to make word-boundary fuzzing interesting — M-f/M-b/M-d must stop at them.
+export const SELF_INSERT = [..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,;:!?()[]{}\"'#_=+*/\\|@%&^~<>$`-"];
 
 // --- DEFERRED — deliberately NOT in the fuzz alphabet yet -------------------
 //
-// ADD THEM HERE. Each needs work in the generator (and, for the first two, in
-// the oracle) before it can be fuzzed; see DESIGN.md "Widening the alphabet".
+// ADD THEM HERE. Each needs work in the generator (and, for some, in the
+// oracle) before it can be fuzzed; see DESIGN.md "Widening the alphabet".
 //
 //   - M-% (query-replace) is *interactive*: it reads keys until an explicit
-//     terminator, so a generator that emits it as a loose token leaves the
-//     oracle inside a recursive read and the two sides diverge for reasons that
-//     say nothing about correctness. The way in is the same one isearch took —
-//     a compound token carrying the whole prompt-and-terminate sequence (see
-//     SEARCH_STRINGS / ISEARCH above and keys.js `parseCompound`) — plus a
-//     query-replace implementation to compare against.
-//   - C-g (keyboard-quit) signals `quit`, not `error`. The oracle already
-//     catches it, but "what is the state after a quit mid-command" is not a
-//     property we can state until prefix arguments and isearch are in.
-//   - C-u (universal-argument) spans tokens: the prefix and the command it
-//     modifies are one command from the command loop's point of view, which
-//     breaks the one-token-one-command invariant the error-resume logic relies
-//     on. Emit "C-u 3 C-f" as a single compound token when it lands.
+//     terminator. Needs the compound-token recipe isearch established — a
+//     generator action emitting the full prompt-and-terminate sequence — plus
+//     a query-replace implementation to compare against. Plugin stub as of v1.
+//   - C-g (keyboard-quit) is IMPLEMENTED in the plugin. The blocker now is
+//     defining the stated property: after a standalone C-g the buffer, point
+//     and mark are unchanged; region deactivates. After C-g mid-command the
+//     oracle restarts at the next token (pre-command-hook counter). Add with
+//     a property-checking differential wrapper.
+//   - C-u (universal-argument) is IMPLEMENTED in the plugin. The blocker:
+//     universal-arg spans tokens (C-u + digit + command), breaking the
+//     one-token-one-command invariant. Emit "C-u 3 C-f" as a single compound
+//     token. M-5 C-f (digit-argument) is the same class.
 //   - C-x C-s (save-buffer) would prompt for a filename in the oracle buffer
 //     (it has no buffer-file-name) and hang the batch process. Never fuzzable
 //     in this harness.
@@ -129,11 +131,12 @@ export const SELF_INSERT = [..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJ0123456789 .
 //     that parity.js only pins nominally; add them together with an indent
 //     parity pass.
 export const DEFERRED = [
-  { key: "M-%", cmd: "query-replace", blocked: "interactive, and not implemented yet; needs a compound token" },
-  { key: "C-g", cmd: "keyboard-quit", blocked: "quit signal; no stated property yet" },
-  { key: "C-u", cmd: "universal-argument", blocked: "spans tokens; breaks 1 token = 1 command" },
+  { key: "M-%", cmd: "query-replace", blocked: "interactive; needs compound token + plugin implementation" },
+  { key: "C-g", cmd: "keyboard-quit", blocked: "implemented in plugin; needs stated property + generator action" },
+  { key: "C-u", cmd: "universal-argument", blocked: "implemented in plugin; needs compound token (spans tokens)" },
   { key: "C-x C-s", cmd: "save-buffer", blocked: "prompts in batch; would hang the oracle" },
-  { key: "RET", cmd: "newline", blocked: "needs indent parity" },
+  { key: "RET", cmd: "newline", blocked: "needs indent parity pass" },
+  { key: "TAB", cmd: "indent", blocked: "needs indent parity pass" },
 ];
 
 // --- helpers ----------------------------------------------------------------

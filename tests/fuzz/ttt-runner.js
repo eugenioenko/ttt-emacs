@@ -27,12 +27,17 @@ import { lineColToPoint } from "./normalize.js";
 // literal ";" or ":" is not mistaken for a step boundary.
 const SEP = "\x1f";
 
-const PLUGIN_LOAD_MS = Number(process.env.FUZZ_PLUGIN_WAIT || 300);
+const PLUGIN_LOAD_MS = Number(process.env.FUZZ_PLUGIN_WAIT || 500);
 const SETTLE_MS = Number(process.env.FUZZ_SETTLE || 150);
 
 function buildScript(tokens, statePath) {
   return [
     `wait ${PLUGIN_LOAD_MS}`, // let the plugin load and install its key interceptor
+    // Pre-flight: take an early debug dump to verify the editor is stable
+    // (no overlays open, buffer loaded). The run fails loudly here rather
+    // than silently sending tokens to a not-yet-loaded plugin. On slow CI,
+    // increase FUZZ_PLUGIN_WAIT (default 500 ms).
+    `debug ${statePath}.pre`,
     ...tokensToTttKeys(tokens),
     `wait ${SETTLE_MS}`, // let the last command's redraw land
     `debug ${statePath}`,
@@ -96,14 +101,35 @@ export function runTtt(inputText, tokens) {
       },
     );
 
+    // Pre-flight: the first debug dump verifies the editor is stable before any
+    // tokens were sent. An overlay here means the plugin approval dialog (or
+    // another modal) swallowed the keys — the run is invalid.
+    const prePath = statePath + ".pre";
+    let preState;
+    try {
+      preState = JSON.parse(readFileSync(prePath, "utf8"));
+    } catch {
+      // pre-flight dump was not produced — harness or binary failure
+      throw new Error("ttt-runner: pre-flight debug dump missing — binary or harness failure");
+    }
+    if (preState.overlay) {
+      throw new Error(
+        `ttt-runner: overlay open before any tokens were sent: ${JSON.stringify(preState.overlay)} ` +
+          `— plugin may not have loaded; increase FUZZ_PLUGIN_WAIT (current: ${PLUGIN_LOAD_MS} ms)`,
+      );
+    }
+    if (!preState.buffer) {
+      throw new Error("ttt-runner: pre-flight debug dump has no buffer");
+    }
+
     const state = JSON.parse(readFileSync(statePath, "utf8"));
     if (!state.buffer) throw new Error("ttt-runner: debug dump has no buffer");
     if (state.buffer.text_truncated) {
       throw new Error("ttt-runner: debug dump truncated the buffer text (>1000 lines)");
     }
     if (state.overlay) {
-      // A dialog (plugin-approval, quit-confirm, …) swallowed the keys; the
-      // state is meaningless. Fail loudly rather than report a false match.
+      // A dialog (command-palette, quit-confirm, …) swallowed keys; the state
+      // is meaningless. Fail loudly rather than report a false match.
       throw new Error(`ttt-runner: an overlay was open at dump time: ${JSON.stringify(state.overlay)}`);
     }
 

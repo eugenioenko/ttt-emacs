@@ -12,16 +12,27 @@
 import { makeRng, pick, int, chance } from "./rng.js";
 import * as A from "./alphabet.js";
 
+// Derive key pools from alphabet groups so adding a key to alphabet.js
+// automatically makes it fuzzable. The shape of each group is preserved:
+// char/line motions are cheap, word motions and buffer ends are rarer.
+const MOVE_CHAR = ["C-f", "C-b", "C-n", "C-p"];
+const MOVE_WORD = ["M-f", "M-b"];
+const MOVE_EOL = ["C-a", "C-e"];
+const MOVE_BUF = ["M-<", "M->"];
+const KILL_SOURCES = ["C-k", "M-d", "C-d", "DEL"];
+const CASE_KEYS = A.keys(A.CASE);
+const OTHER_KEYS = A.keys(A.OTHER).filter((k) => k !== "C-/"); // undo handled separately
+
 // A burst of 1–3 movement keys, biased towards the cheap char/line motions.
 function movement(rng) {
   const n = int(rng, 1, 3);
   const out = [];
   for (let i = 0; i < n; i++) {
     const r = rng();
-    if (r < 0.55) out.push(pick(rng, ["C-f", "C-b", "C-n", "C-p"]));
-    else if (r < 0.8) out.push(pick(rng, ["M-f", "M-b"]));
-    else if (r < 0.95) out.push(pick(rng, ["C-a", "C-e"]));
-    else out.push(pick(rng, ["M-<", "M->"]));
+    if (r < 0.55) out.push(pick(rng, MOVE_CHAR));
+    else if (r < 0.8) out.push(pick(rng, MOVE_WORD));
+    else if (r < 0.95) out.push(pick(rng, MOVE_EOL));
+    else out.push(pick(rng, MOVE_BUF));
   }
   return out;
 }
@@ -48,7 +59,7 @@ function regionAction(rng) {
 
 // Kill something, then (usually) move and yank it back somewhere else.
 function killYank(rng) {
-  const k = pick(rng, ["C-k", "M-d", "C-d", "DEL"]);
+  const k = pick(rng, KILL_SOURCES);
   const reps = chance(rng, 0.3) ? int(rng, 2, 3) : 1;
   const out = [];
   for (let i = 0; i < reps; i++) out.push(k);
@@ -90,12 +101,12 @@ function action(rng) {
 
   // 9%: case transform, sometimes repeated across consecutive words
   if (r < 0.81) {
-    const c = pick(rng, A.keys(A.CASE));
+    const c = pick(rng, CASE_KEYS);
     return chance(rng, 0.4) ? [c, c] : [c];
   }
 
   // 7%: transpose / open-line
-  if (r < 0.88) return [pick(rng, ["C-t", "C-o"])];
+  if (r < 0.88) return [pick(rng, OTHER_KEYS)];
 
   // 7%: an incremental search
   if (r < 0.95) return isearch(rng);

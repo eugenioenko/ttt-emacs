@@ -249,6 +249,14 @@ local function arg_value()
 	return a.mult, true
 end
 
+-- Segment IDs that ttt core owns on the status bar. When the echo area is
+-- active these are removed so the echo message has the status bar to itself --
+-- exactly as Emacs's echo area replaces the mode line during isearch and
+-- prompts. The core re-adds them on the next event-loop tick after echo clears.
+local CORE_SEGMENTS = {
+	"branch", "position", "encoding", "eol", "indent", "language", "blame",
+}
+
 local function render_status()
 	if not status_ready() then
 		return
@@ -258,6 +266,21 @@ local function render_status()
 		ttt.remove_status_item("echo")
 		return
 	end
+
+	if state.echo_msg then
+		-- Echo active: suppress mode-line segments so the echo message stands
+		-- alone. Core segments are removed every render pass (the core re-adds
+		-- them on each event-loop tick, so they must be cleared continuously).
+		for _, id in ipairs(CORE_SEGMENTS) do
+			ttt.remove_status_item(id)
+		end
+		ttt.remove_status_item("mode")
+		ttt.set_status_item("left", "echo", state.echo_msg, { priority = 10 })
+		return
+	end
+
+	-- Echo inactive: restore normal mode line.
+	ttt.remove_status_item("echo")
 
 	local parts = {}
 	if state.arg.active then
@@ -272,22 +295,10 @@ local function render_status()
 	if state.macro.recording then
 		parts[#parts + 1] = "Def"
 	end
-	-- No idle label. Vim needs one because it is modal and the label says what
-	-- the next keystroke will do; Emacs is not modal and has no such indicator,
-	-- so the slot only ever carries the TRANSIENT states above -- a pending
-	-- prefix, a universal argument, C-q, macro recording -- and is empty during
-	-- ordinary editing. The echo area is a separate item ("echo") and is not
-	-- affected by this.
 	if #parts > 0 then
 		ttt.set_status_item("left", "mode", table.concat(parts, " "), { priority = 10 })
 	else
 		ttt.remove_status_item("mode")
-	end
-
-	if state.echo_msg then
-		ttt.set_status_item("left", "echo", state.echo_msg, { priority = 11 })
-	else
-		ttt.remove_status_item("echo")
 	end
 end
 
@@ -2026,7 +2037,7 @@ local RECTANGLE_MAP = {
 	["o"] = TODO("open-rectangle"),
 	["d"] = TODO("delete-rectangle"),
 	["c"] = TODO("clear-rectangle"),
-	["ctrl-space"] = TODO("point-to-register"),
+	[" "] = TODO("point-to-register"), -- C-x r SPC — Emacs binds this to a plain space, not ctrl-space
 	["j"] = TODO("jump-to-register"),
 	["s"] = TODO("copy-to-register"),
 	["i"] = TODO("insert-register"),
