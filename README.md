@@ -55,9 +55,8 @@ harmless if you keep it.
 keys, `<home>`, `<end>`, `<pgup>` and `<pgdn>` work as their Emacs equivalents,
 so the region follows them too.
 
-Not yet implemented, and stubbed with a message rather than silently ignored:
-query-replace (`M-%`), rectangles and registers (`C-x r …`), and write-file
-(`C-x C-w`).
+`M-%` opens the Replace dialog; `C-x C-w` opens Save As. Not yet implemented
+and stubbed with a message: rectangles and registers (`C-x r …`).
 
 ## Settings
 

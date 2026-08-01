@@ -2187,7 +2187,11 @@ local CTRL_X_MAP = {
 	["ctrl-f"] = C("find-file", cmds.find_file),
 	["b"] = C("switch-to-buffer", cmds.switch_to_buffer),
 	["k"] = C("kill-buffer", cmds.kill_buffer),
-	["ctrl-w"] = TODO("write-file", "use File > Save As for now"),
+	["ctrl-w"] = C("write-file", function()
+		if ttt.exec_command("file.saveAs") then
+			clear_echo()
+		end
+	end),
 }
 
 local HELP_MAP = {} -- filled in below, once describe_bindings exists
