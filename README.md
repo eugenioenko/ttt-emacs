@@ -44,19 +44,20 @@ harmless if you keep it.
 | **Move** | `C-f` `C-b` `C-n` `C-p` `C-a` `C-e` `M-f` `M-b` `C-v` `M-v` `M-<` `M->` `C-l` |
 | **Mark** | `C-SPC` `C-x C-x` `C-x h` `C-u C-SPC` |
 | **Kill / yank** | `C-k` `C-w` `M-w` `C-y` `M-y` `M-d` `M-DEL` `C-d` `DEL` |
-| **Edit** | `C-t` `C-o` `M-u` `M-l` `M-c` `C-q` |
+| **Edit** | `C-t` `C-o` `M-u` `M-l` `M-c` `C-q` `M-t` `M-\` `M-^` |
 | **Undo** | `C-/` `C-x u` |
 | **Files** | `C-x C-s` `C-x C-f` `C-x b` `C-x k` `C-x C-c` |
 | **Commands** | `M-x` `C-g` `C-u` `C-h b` |
 | **Macros** | `C-x (` `C-x )` `C-x e` |
-| **Search** | `C-s` `C-r` — incremental: `DEL` backtracks, `C-g` aborts, `RET` exits |
+| **Search** | `C-s` `C-r` — incremental: `DEL` backtracks, `C-g` aborts, `RET` exits, `M-p`/`M-n` history, `C-w` yanks next word |
 
 `C-h b` (describe-bindings) lists every binding from inside the editor. Arrow
 keys, `<home>`, `<end>`, `<pgup>` and `<pgdn>` work as their Emacs equivalents,
 so the region follows them too.
 
 Not yet implemented, and stubbed with a message rather than silently ignored:
-query-replace (`M-%`) and rectangles (`C-x r …`).
+query-replace (`M-%`), rectangles and registers (`C-x r …`), and write-file
+(`C-x C-w`).
 
 ## Settings
 
